@@ -27,6 +27,7 @@ type app struct {
 	db  *store
 	tg  *telegram
 	bot string // username бота без @
+	hub *hub
 }
 
 func loadConfig() (config, error) {
@@ -83,6 +84,7 @@ func run() error {
 		return err
 	}
 	a := &app{cfg: cfg, db: db, tg: tg, bot: me.Username}
+	a.hub = newHub(a)
 	slog.Info("bot", "username", a.bot)
 
 	if cfg.PublicURL != "" {

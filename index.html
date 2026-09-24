@@ -33,19 +33,20 @@
     <canvas id="cv" width="320" height="200"></canvas>
     <div class="hud" id="hud" hidden>
       <div class="side r">
-        <span class="who">КРАСНЫЕ</span>
+        <span class="who" id="w0">КРАСНЫЕ</span>
         <span class="score" id="s0">0</span>
         <div class="meters"><span class="thr"><b id="t0"></b></span><span class="hp" id="h0"><i></i><i></i></span></div>
         <span class="state" id="st0"></span>
       </div>
       <div class="side b">
-        <span class="who">СИНИЕ</span>
+        <span class="who" id="w1">СИНИЕ</span>
         <span class="score" id="s1">0</span>
         <div class="meters"><span class="thr"><b id="t1"></b></span><span class="hp" id="h1"><i></i><i></i></span></div>
         <span class="state" id="st1"></span>
       </div>
     </div>
     <div class="toast hide" id="toast"></div>
+    <div class="countdown" id="countdown" hidden></div>
     <div class="overlay" id="overlay"></div>
   </div>
 
@@ -64,7 +65,7 @@
 
   <section class="league">
     <div class="box g board-box">
-      <h2>Рейтинг пилотов</h2>
+      <div class="board-head"><h2>Рейтинг пилотов</h2><div class="seg tabs" id="boardTabs"><button type="button" data-kind="bot" aria-pressed="true">Против бота</button><button type="button" data-kind="pvp" aria-pressed="false">Онлайн</button></div></div>
       <div class="board" id="board"><p class="muted">Загружаю…</p></div>
     </div>
     <div class="box profile" id="profile"><h2>Мой профиль</h2><p class="muted">Загружаю…</p></div>

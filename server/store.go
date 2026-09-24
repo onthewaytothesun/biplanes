@@ -60,6 +60,27 @@ CREATE TABLE IF NOT EXISTS matches (
 );
 CREATE INDEX IF NOT EXISTS matches_user ON matches(tg_id, created_at);
 
+CREATE TABLE IF NOT EXISTS pvp_matches (
+	id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+	kind               TEXT    NOT NULL,             -- quick | invite
+	target             INTEGER NOT NULL,
+	red_id             INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
+	blue_id            INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
+	red_score          INTEGER NOT NULL,
+	blue_score         INTEGER NOT NULL,
+	winner             INTEGER NOT NULL,             -- 0 красные, 1 синие, -1 ничья
+	reason             TEXT    NOT NULL,             -- score | forfeit | timeout
+	duration_ms        INTEGER NOT NULL,
+	red_stats          TEXT    NOT NULL,             -- JSON sim.Stats
+	blue_stats         TEXT    NOT NULL,
+	red_rating_before  INTEGER NOT NULL,
+	red_rating_after   INTEGER NOT NULL,
+	blue_rating_before INTEGER NOT NULL,
+	blue_rating_after  INTEGER NOT NULL,
+	created_at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pvp_red ON pvp_matches(red_id, created_at);
+CREATE INDEX IF NOT EXISTS pvp_blue ON pvp_matches(blue_id, created_at);
 `
 
 var errNotFound = errors.New("not found")
@@ -78,7 +99,35 @@ func openStore(path string) (*store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := addColumn(db, "users", "pvp_rating", "INTEGER NOT NULL DEFAULT 1000"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	return &store{db: db}, nil
+}
+
+// addColumn — идемпотентный ALTER TABLE ADD COLUMN для таблиц, созданных до появления колонки.
+func addColumn(db *sql.DB, table, column, def string) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+	_, err = db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + def)
+	return err
 }
 
 func (s *store) close() error { return s.db.Close() }
@@ -90,6 +139,7 @@ type user struct {
 	LastName  string `json:"lastName"`
 	PhotoURL  string `json:"photoUrl"`
 	Rating    int    `json:"rating"`
+	PvPRating int    `json:"pvpRating"`
 }
 
 func (s *store) upsertUser(ctx context.Context, u tgUser, now time.Time) error {
@@ -109,8 +159,8 @@ func (s *store) upsertUser(ctx context.Context, u tgUser, now time.Time) error {
 func (s *store) getUser(ctx context.Context, tgID int64) (user, error) {
 	var u user
 	err := s.db.QueryRowContext(ctx,
-		`SELECT tg_id, username, first_name, last_name, photo_url, rating FROM users WHERE tg_id = ?`, tgID).
-		Scan(&u.TgID, &u.Username, &u.FirstName, &u.LastName, &u.PhotoURL, &u.Rating)
+		`SELECT tg_id, username, first_name, last_name, photo_url, rating, pvp_rating FROM users WHERE tg_id = ?`, tgID).
+		Scan(&u.TgID, &u.Username, &u.FirstName, &u.LastName, &u.PhotoURL, &u.Rating, &u.PvPRating)
 	if errors.Is(err, sql.ErrNoRows) {
 		return u, errNotFound
 	}

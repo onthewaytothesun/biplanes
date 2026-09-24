@@ -8,6 +8,7 @@ import (
 	"html"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -21,6 +22,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/me", a.handleMe)
 	mux.HandleFunc("POST /api/matches", a.handleMatch)
 	mux.HandleFunc("GET /api/leaderboard", a.handleLeaderboard)
+	mux.HandleFunc("GET /api/ws", a.hub.serveWS)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 	mux.HandleFunc("POST /tg/webhook", a.handleWebhook)
 	if a.cfg.StaticDir != "" {
@@ -194,12 +196,14 @@ func (a *app) handleMe(w http.ResponseWriter, r *http.Request) {
 	st, err1 := a.db.userStats(ctx, id)
 	rank, err2 := a.db.rank(ctx, id)
 	recent, err3 := a.db.recentMatches(ctx, id, 10)
-	if err := errors.Join(err1, err2, err3); err != nil {
+	pvp, err4 := a.db.pvpStats(ctx, id)
+	recentPvP, err5 := a.db.recentPvP(ctx, id, 10)
+	if err := errors.Join(err1, err2, err3, err4, err5); err != nil {
 		slog.Error("me", "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"user": u, "stats": st, "rank": rank, "recent": recent})
+	writeJSON(w, http.StatusOK, map[string]any{"user": u, "stats": st, "rank": rank, "recent": recent, "pvp": pvp, "recentPvp": recentPvP})
 }
 
 func (a *app) handleMatch(w http.ResponseWriter, r *http.Request) {
@@ -231,7 +235,11 @@ func (a *app) handleMatch(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 	me, _ := a.currentUser(r)
-	rows, err := a.db.leaderboard(r.Context(), me, 50)
+	load := a.db.leaderboard
+	if r.URL.Query().Get("kind") == "pvp" {
+		load = a.db.pvpLeaderboard
+	}
+	rows, err := load(r.Context(), me, 50)
 	if err != nil {
 		slog.Error("leaderboard", "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
@@ -278,6 +286,11 @@ func (a *app) onMessage(ctx context.Context, m *tgMessage) {
 		return
 	}
 	param := strings.TrimSpace(strings.TrimPrefix(m.Text, "/start"))
+	if code, ok := strings.CutPrefix(param, "room_"); ok && a.cfg.PublicURL != "" {
+		a.send(ctx, m.Chat.ID, "Тебя зовут на дуэль в <b>Бипланах</b>! Жми кнопку, бой начнётся сразу.",
+			keyboard([]inlineButton{{Text: "✈️ Принять вызов", WebApp: map[string]string{"url": a.cfg.PublicURL + "/?room=" + url.QueryEscape(code)}}}))
+		return
+	}
 	if nonce, ok := strings.CutPrefix(param, loginStartParam); ok {
 		open, err := a.db.loginOpen(ctx, nonce, time.Now())
 		if err != nil {

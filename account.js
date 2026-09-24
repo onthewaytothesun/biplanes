@@ -10,6 +10,9 @@
   let me = null; // ответ /api/me
   let pending = null; // результат матча, сыгранного до входа
   let login = null; // { nonce, secret, url, timer, deadline }
+  let boardKind = 'bot';
+  let markReady;
+  const ready = new Promise((r) => { markReady = r; });
 
   try { token = localStorage.getItem(TOKEN_KEY); } catch (e) { token = null; }
   const saveToken = (t) => { token = t; try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch (e) { /* private mode */ } };
@@ -60,6 +63,7 @@
     await refreshMe();
     render();
     loadBoard();
+    dispatchEvent(new Event('bp:login'));
     if (pending) {
       const { result, el } = pending; pending = null;
       reportMatch(result, el && el.isConnected ? el : null);
@@ -135,7 +139,8 @@
       fill(box, 
         h('span', { class: 'who-chip' },
           h('span', { class: 'nm' }, name(me.user)),
-          h('span', { class: 'rt' }, 'рейтинг ', h('b', null, me.user.rating))),
+          h('span', { class: 'rt' }, 'рейтинг ', h('b', null, me.user.rating)),
+          me.pvp.matches ? h('span', { class: 'rt' }, 'онлайн ', h('b', null, me.pvp.rating)) : null),
         inMiniApp ? null : h('button', { type: 'button', class: 'btn', onclick: logout }, 'Выйти'));
     } else if (!inMiniApp) {
       fill(box, h('button', { type: 'button', class: 'btn tg', onclick: startLogin }, 'Войти через Telegram'));
@@ -157,6 +162,14 @@
     const s = me.stats;
     const acc = s.shots ? Math.round(s.hits / s.shots * 100) + '%' : '—';
     const kd = s.deaths ? (s.kills / s.deaths).toFixed(2) : (s.kills ? s.kills.toFixed(2) : '—');
+    const p = me.pvp;
+    const recentPvp = me.recentPvp.length
+      ? h('ol', { class: 'recent' }, me.recentPvp.map((m) => h('li', null,
+        h('span', { class: m.won ? 'up' : 'down' }, m.won ? 'Победа' : 'Поражение'),
+        h('span', { class: 'sc' }, m.myScore + ' : ' + m.oppScore),
+        h('span', { class: 'muted opp' }, 'vs ' + m.opponent),
+        h('span', { class: 'dl' }, signed(m.ratingDelta)))))
+      : h('p', { class: 'muted' }, 'Онлайн-боёв пока нет. Жми «Онлайн» в меню игры.');
     const recent = me.recent.length
       ? h('ol', { class: 'recent' }, me.recent.map((m) => h('li', null,
         h('span', { class: m.won ? 'up' : 'down' }, m.won ? 'Победа' : 'Поражение'),
@@ -172,17 +185,23 @@
         stat('Матчи', s.matches),
         stat('Победы над ботом', s.botWins + ' из ' + s.botMatches),
         stat('Сбито / потеряно', s.kills + ' / ' + s.deaths),
-        stat('Точность', acc + (kd !== '—' ? ' · K/D ' + kd : ''))),
-      h('h3', null, 'Последние матчи'),
+        stat('Точность', acc + (kd !== '—' ? ' · K/D ' + kd : '')),
+        stat('Онлайн-рейтинг', p.matches ? p.rating : '—'),
+        stat('Онлайн: место · победы', p.matches ? (p.rank || '—') + ' · ' + p.wins + ' из ' + p.matches : '—')),
+      h('h3', null, 'Онлайн-бои'),
+      recentPvp,
+      h('h3', null, 'Против бота'),
       recent);
   }
 
-  async function loadBoard() {
-    const r = await api('/leaderboard');
+  async function loadBoard(kind) {
+    if (kind) boardKind = kind;
+    document.querySelectorAll('#boardTabs button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.kind === boardKind)));
+    const r = await api('/leaderboard' + (boardKind === 'pvp' ? '?kind=pvp' : ''));
     const box = $('board');
     if (r.status !== 200) { fill(box, h('p', { class: 'muted' }, 'Рейтинг сейчас недоступен.')); return; }
     const rows = r.data.rows;
-    if (!rows.length) { fill(box, h('p', { class: 'muted' }, 'Здесь пока пусто. Выиграй у бота и стань первым.')); return; }
+    if (!rows.length) { fill(box, h('p', { class: 'muted' }, boardKind === 'pvp' ? 'Онлайн-боёв ещё не было. Сыграй первым!' : 'Здесь пока пусто. Выиграй у бота и стань первым.')); return; }
     fill(box, h('table', null,
       h('thead', null, h('tr', null, h('th', null, '#'), h('th', null, 'Пилот'), h('th', { class: 'n' }, 'Рейтинг'), h('th', { class: 'n' }, 'Матчи'), h('th', { class: 'n' }, 'Победы'))),
       h('tbody', null, rows.map((x) => h('tr', { class: x.me ? 'me' : null },
@@ -198,6 +217,7 @@
   // ---------- boot ----------
   async function boot() {
     $('loginClose').addEventListener('click', closeLogin);
+    $('boardTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) loadBoard(b.dataset.kind); });
     $('loginModal').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeLogin(); });
     addEventListener('keydown', (e) => { if (e.key === 'Escape' && login) closeLogin(); });
 
@@ -211,13 +231,16 @@
     }
     if (inMiniApp) {
       const r = await api('/auth/webapp', { method: 'POST', body: { initData: tg.initData } });
-      if (r.status === 200) { await onLoggedIn(r.data); return; }
+      if (r.status === 200) { await onLoggedIn(r.data); markReady(); return; }
     }
     await refreshMe();
     render();
     loadBoard();
+    markReady();
   }
 
-  window.bpAccount = { reportMatch, login: startLogin, isLoggedIn: () => !!me };
+  async function refresh() { await refreshMe(); render(); loadBoard(); }
+
+  window.bpAccount = { reportMatch, login: startLogin, isLoggedIn: () => !!me, token: () => token, ready, refresh };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();

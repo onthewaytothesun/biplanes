@@ -81,14 +81,26 @@
     return c;
   }
 
-  function makeCloud(w, h) {
+  // Облака одинаковые у всех игроков (в онлайне за ними прячутся), поэтому генератор с зерном.
+  function seeded(seed) {
+    let s = seed >>> 0;
+    return () => {
+      s = (s + 0x6D2B79F5) >>> 0;
+      let t = s;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function makeCloud(w, h, seed) {
+    const rand = seeded(seed), rr = (a, b) => a + rand() * (b - a);
     const c = mk(w, h), g = c.getContext('2d');
     const img = g.createImageData(w, h), d = img.data;
     const blobs = [];
-    const n = 4 + Math.floor(Math.random() * 3);
+    const n = 4 + Math.floor(rand() * 3);
     for (let i = 0; i < n; i++) {
-      const r = rnd(h * 0.3, h * 0.5);
-      blobs.push({ x: rnd(r, w - r), y: h - r - rnd(0, h * 0.25), r });
+      const r = rr(h * 0.3, h * 0.5);
+      blobs.push({ x: rr(r, w - r), y: h - r - rr(0, h * 0.25), r });
     }
     blobs.push({ x: w / 2, y: h * 0.62, r: h * 0.38 });
     const top = hex('#ffffff'), mid = hex('#eef5fb'), low = hex('#cfe0ee');
@@ -146,12 +158,13 @@
 
   const bg = buildBg();
   const clouds = [
-    { x: 40, y: 48, img: makeCloud(58, 20), v: 5, fg: true },
-    { x: 190, y: 84, img: makeCloud(64, 22), v: 5, fg: true },
-    { x: 110, y: 118, img: makeCloud(48, 18), v: 5, fg: true },
-    { x: 260, y: 30, img: makeCloud(38, 14), v: 2.5, fg: false },
-    { x: 150, y: 20, img: makeCloud(30, 12), v: 2.5, fg: false },
+    { x: 40, y: 48, img: makeCloud(58, 20, 11), v: 5, fg: true },
+    { x: 190, y: 84, img: makeCloud(64, 22, 23), v: 5, fg: true },
+    { x: 110, y: 118, img: makeCloud(48, 18, 37), v: 5, fg: true },
+    { x: 260, y: 30, img: makeCloud(38, 14, 41), v: 2.5, fg: false },
+    { x: 150, y: 20, img: makeCloud(30, 12, 53), v: 2.5, fg: false },
   ];
+  clouds.forEach((c) => { c.x0 = c.x; });
 
   // ---------- audio ----------
   let ac = null, muted = false;
@@ -174,7 +187,7 @@
     s.connect(f).connect(g).connect(ac.destination); s.start(t);
   }
   function sfx(name) {
-    if (!ac || muted || game.mode !== 'play') return;
+    if (!ac || muted || !live()) return;
     try {
       if (name === 'shot') tone(900, 380, 0.05, 'square', 0.035);
       else if (name === 'hit') noise(0.09, 0.25, 2400);
@@ -188,7 +201,11 @@
   }
 
   // ---------- state ----------
+  // mode: attract (заставка) | play (бот / вдвоём) | lobby (онлайн-меню, фоном заставка) | online (сетевой бой)
   const game = { mode: 'attract', paused: false, over: false, vsBot: true, target: 10, playTime: 0, stats: null };
+  function live() { return game.mode === 'play' || game.mode === 'online'; }
+  function attractLike() { return game.mode === 'attract' || game.mode === 'lobby'; }
+  const esc = (v) => String(v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   // Статистика красного (игрок 1) для отправки на сервер
   const track = (k) => { if (game.mode === 'play' && game.stats) game.stats[k]++; };
   let players, planes, pilots, bullets, parts;
@@ -213,12 +230,13 @@
     for (let i = 0; i < 8; i++) part(x + rnd(-4, 4), y + rnd(-4, 4), rnd(-8, 8), rnd(-25, -8), rnd(0.8, 1.4), '#8a8f98', -5, 2);
   }
   function sparks(x, y) { for (let i = 0; i < 6; i++) part(x, y, rnd(-50, 50), rnd(-50, 50), rnd(0.1, 0.3), i % 2 ? '#fff6c0' : '#ffb13b'); }
+  function splat(x, y, team) { for (let i = 0; i < 8; i++) part(x, y, rnd(-40, 40), rnd(-60, -10), rnd(0.4, 0.8), i % 2 ? '#b8322a' : TEAM[team].body, 150); }
   function dust(x, y) { for (let i = 0; i < 3; i++) part(x, y, rnd(-20, 20), rnd(-30, -10), rnd(0.2, 0.4), '#9b7a4e', 120); }
 
   let toastTimer = 0;
-  function toast(msg) {
-    if (game.mode !== 'play') return;
-    const el = $('toast'); el.textContent = msg; el.classList.remove('hide'); toastTimer = 1.8;
+  function toast(msg, secs = 1.8) {
+    if (!live()) return;
+    const el = $('toast'); el.textContent = msg; el.classList.remove('hide'); toastTimer = secs;
   }
 
   // ---------- scoring ----------
@@ -229,7 +247,7 @@
     pl.pilot = null; pl.plane = pl.plane && pl.plane.dead ? null : pl.plane; pl.respawn = 2.2;
     const other = players[1 - team];
     other.score++;
-    if (game.mode === 'attract') { if (other.score >= 99) players.forEach((p) => p.score = 0); return; }
+    if (attractLike()) { if (other.score >= 99) players.forEach((p) => p.score = 0); return; }
     sfx('point');
     toast(msg + ' · +1 ' + TEAM[1 - team].name.toLowerCase());
     if (other.score >= game.target) setTimeout(() => endMatch(1 - team), 900);
@@ -248,7 +266,7 @@
   function killPilot(pt, msg, byTeam) {
     if (pt.dead) return;
     pt.dead = true;
-    for (let i = 0; i < 8; i++) part(pt.x, pt.y, rnd(-40, 40), rnd(-60, -10), rnd(0.4, 0.8), i % 2 ? '#b8322a' : TEAM[pt.team].body, 150);
+    splat(pt.x, pt.y, pt.team);
     sfx('hit');
     pilotDied(pt.team, msg, byTeam);
   }
@@ -367,8 +385,8 @@
   const touch = { left: false, right: false, up: false, down: false, fire: false }; let touchEject = false;
 
   addEventListener('keydown', (e) => {
-    if (e.code === 'KeyP' || e.code === 'Escape') { if (game.mode === 'play' && !game.over) togglePause(); return; }
-    if (game.mode === 'play' && !game.paused && GAME_KEYS.has(e.code)) { e.preventDefault(); audioOn(); }
+    if (e.code === 'KeyP' || e.code === 'Escape') { if (live() && !game.over) togglePause(); return; }
+    if (live() && !game.paused && GAME_KEYS.has(e.code)) { e.preventDefault(); audioOn(); }
     if (!e.repeat) tapped.add(e.code);
     keys.add(e.code);
   });
@@ -376,7 +394,7 @@
   addEventListener('blur', () => keys.clear());
 
   function humanInput(team) {
-    const maps = team === 0 && game.vsBot ? [MAP[0], MAP[1]] : [MAP[team]];
+    const maps = team === 0 && (game.vsBot || game.mode === 'online') ? [MAP[0], MAP[1]] : [MAP[team]];
     const any = (k, set) => maps.some((m) => m[k].some((c) => set.has(c)));
     const I = { left: any('left', keys), right: any('right', keys), up: any('up', keys), down: any('down', keys), fire: any('fire', keys), eject: any('eject', tapped) };
     if (team === 0) { for (const k in touch) I[k] = I[k] || touch[k]; I.eject = I.eject || touchEject; }
@@ -489,12 +507,16 @@
       if (p.respawn <= 0) { const pl = newPlane(p.team); planes.push(pl); p.plane = pl; }
     });
 
+    updateFx(dt);
+    for (const c of clouds) c.x = wrapX(c.x + c.v * dt);
+  }
+
+  function updateFx(dt) {
     for (const q of parts) {
       q.vy += q.grav * dt; q.x += q.vx * dt; q.y += q.vy * dt; q.t -= dt;
       if (q.y > GROUND - 1 && q.grav > 0) { q.y = GROUND - 1; q.vy *= -0.3; q.vx *= 0.6; }
     }
     parts = parts.filter((q) => q.t > 0);
-    for (const c of clouds) c.x = wrapX(c.x + c.v * dt);
   }
 
   // ---------- draw ----------
@@ -567,7 +589,11 @@
       const c = hudCache[i];
       const thr = p.plane ? Math.round(p.plane.thr * 100) : 0;
       const hp = p.plane ? p.plane.hp : 0;
-      const st = stateText(p);
+      let st = stateText(p);
+      if (game.mode === 'online') {
+        if (i === net.you) st += net.rtt ? ' · ' + net.rtt + ' мс' : '';
+        else if (!net.oppOnline) st = 'нет связи…';
+      }
       if (c.score !== p.score) { $('s' + i).textContent = c.score = p.score; }
       if (c.thr !== thr) { $('t' + i).style.width = (c.thr = thr) + '%'; }
       if (c.hp !== hp) { c.hp = hp; [...$('h' + i).children].forEach((el, k) => el.classList.toggle('off', k >= hp)); }
@@ -579,7 +605,9 @@
   const overlay = $('overlay');
   function showOverlay(html) { overlay.innerHTML = html; overlay.hidden = false; }
   function menu() {
+    if (game.mode === 'online' || game.mode === 'lobby') netClose();
     game.mode = 'attract'; game.paused = false; game.over = false;
+    setWho(null);
     resetWorld([true, true]);
     $('hud').hidden = true;
     const seg = [5, 10, 15].map((n) => `<button type="button" data-target="${n}" aria-pressed="${n === game.target}">${n}</button>`).join('');
@@ -588,10 +616,15 @@
       <p>Дуэль двух бипланов над одним полем. Сбей соперника, а если подбили тебя, прыгай с парашютом и беги в ангар за новым самолётом.</p>
       <div class="row">
         <button class="btn primary" type="button" data-act="bot">Против бота</button>
+        <button class="btn primary" type="button" data-act="online">Онлайн</button>
         <button class="btn" type="button" data-act="duo">Вдвоём</button>
       </div>
       <div class="seg">Играть до ${seg} очков</div>
     </div>`);
+  }
+  function setWho(names) {
+    $('w0').textContent = names ? names[0] : 'КРАСНЫЕ';
+    $('w1').textContent = names ? names[1] : 'СИНИЕ';
   }
   function startMatch(vsBot, target, scores) {
     game.mode = 'play'; game.vsBot = vsBot; game.target = target; game.paused = false; game.over = false;
@@ -627,6 +660,7 @@
     }
   }
   function togglePause() {
+    if (game.mode === 'online') { onlinePause(); return; }
     if (game.mode !== 'play' || game.over) return;
     game.paused = !game.paused;
     if (game.paused) {
@@ -651,6 +685,7 @@
     else if (act === 'again') startMatch(game.vsBot, game.target);
     else if (act === 'menu') menu();
     else if (act === 'resume') togglePause();
+    else onlineAct(act, t);
   });
   $('pauseBtn').addEventListener('click', (e) => { togglePause(); e.currentTarget.blur(); });
   $('muteBtn').addEventListener('click', (e) => {
@@ -720,13 +755,341 @@
   $('fbExit').addEventListener('click', () => setFull(false));
   $('fbPause').addEventListener('click', () => togglePause());
 
+  // ---------- online: сервер считает физику, мы шлём нажатия и рисуем его снимки ----------
+  const STATE_P = ['ground', 'air', 'stall'], STATE_PT = ['fall', 'chute', 'walk'];
+  const INTERP = 0.07; // рисуем мир на 70 мс в прошлом, чтобы было между чем интерполировать
+  const net = {
+    ws: null, ready: false, want: null, closing: false, inMatch: false, reconnectAt: 0,
+    you: 0, names: ['', ''], target: 10, kind: '', room: null, waitStart: 0, oppOnline: true,
+    snaps: [], offset: null, keys: -1, eject: 0, lastSend: 0, pingAt: 0, rtt: 0, cdUntil: 0,
+    props: new Map(), smoke: new Map(), pendingJoin: null,
+  };
+  const account = () => window.bpAccount;
+
+  function netSend(o) { if (net.ws && net.ws.readyState === 1) net.ws.send(JSON.stringify(o)); }
+
+  // then — что отправить сразу после входа: {t:'quick'} | {t:'create'} | {t:'join'} | null (переподключение)
+  function netConnect(then) {
+    const token = account() && account().token();
+    if (!token) { onlineLogin(); return; }
+    if (net.ws && net.ws.readyState <= 1) {
+      if (then) { if (net.ready) netSend(then); else net.want = then; }
+      return;
+    }
+    net.want = then; net.closing = false; net.ready = false;
+    let ws;
+    try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/ws'); } catch (e) { onlineError('Не получилось подключиться к серверу.'); return; }
+    net.ws = ws;
+    ws.onopen = () => ws.send(JSON.stringify({ t: 'auth', token }));
+    ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch (err) { return; } onNet(m); };
+    ws.onclose = () => {
+      if (net.ws !== ws) return;
+      net.ws = null; net.ready = false;
+      if (net.closing) return;
+      if (net.inMatch) {
+        // связь пропала посреди боя: сервер держит место 15 секунд
+        if (!net.reconnectAt) net.reconnectAt = performance.now();
+        if (performance.now() - net.reconnectAt < 14000) {
+          toast('Связь потеряна, переподключаюсь…', 1.5);
+          setTimeout(() => { if (net.inMatch && !net.ws) netConnect(null); }, 1000);
+        } else { net.inMatch = false; onlineError('Связь с сервером потеряна, бой засчитан сопернику.'); }
+      } else if (game.mode === 'lobby') onlineError('Связь с сервером потеряна.');
+    };
+  }
+  function netClose() {
+    net.closing = true; net.inMatch = false; net.want = null;
+    if (net.ws) { try { net.ws.close(); } catch (e) { /* already closed */ } }
+    net.ws = null; net.ready = false; net.waitStart = 0;
+  }
+
+  function onNet(m) {
+    switch (m.t) {
+      case 'hello': net.ready = true; net.reconnectAt = 0; if (net.want) { netSend(net.want); net.want = null; } break;
+      case 'waiting': net.waitStart = performance.now(); showWaiting(); break;
+      case 'room': net.room = m; showRoom(); break;
+      case 'start': onlineStart(m); break;
+      case 's': onSnapshot(m); break;
+      case 'opp':
+        net.oppOnline = m.online;
+        toast(m.online ? 'Соперник вернулся' : `Соперник отключился, ждём его до ${Math.round(m.grace)} с…`, m.online ? 1.8 : 4);
+        break;
+      case 'pong': net.rtt = Math.round(performance.now() - m.c); break;
+      case 'end': onlineEnd(m); break;
+      case 'error':
+        if (m.code === 'auth') { netClose(); onlineLogin(); }
+        else { if (m.code === 'replaced') netClose(); onlineError(m.msg); }
+        break;
+    }
+  }
+
+  // ---------- онлайн-экраны ----------
+  function lobbyBackground() {
+    if (game.mode !== 'lobby' && game.mode !== 'attract') resetWorld([true, true]);
+    game.mode = 'lobby'; game.over = false; game.paused = false;
+    $('hud').hidden = true; setWho(null);
+  }
+  function onlineMenu() {
+    lobbyBackground();
+    if (!account() || !account().token()) { onlineLogin(); return; }
+    const seg = [5, 10, 15].map((n) => `<button type="button" data-target="${n}" aria-pressed="${n === game.target}">${n}</button>`).join('');
+    showOverlay(`<div class="card">
+      <div class="big">Онлайн</div>
+      <p>Бой с живым соперником. Физику считает сервер, победы идут в онлайн-рейтинг.</p>
+      <div class="row">
+        <button class="btn primary" type="button" data-act="quick">Быстрая игра</button>
+        <button class="btn" type="button" data-act="create">Позвать друга</button>
+      </div>
+      <div class="seg">С другом до ${seg} очков</div>
+      <button class="btn" type="button" data-act="menu">Назад</button>
+    </div>`);
+  }
+  function onlineLogin() {
+    lobbyBackground();
+    showOverlay(`<div class="card">
+      <div class="big">Нужен вход</div>
+      <p>Для онлайна войди через Telegram: так соперник увидит твоё имя, а победы попадут в рейтинг.</p>
+      <div class="row">
+        <button class="btn tg" type="button" data-act="login">Войти через Telegram</button>
+        <button class="btn" type="button" data-act="menu">Назад</button>
+      </div>
+    </div>`);
+  }
+  function onlineBusy(text) {
+    lobbyBackground();
+    showOverlay(`<div class="card"><div class="big">${esc(text)}</div><button class="btn" type="button" data-act="menu">Отмена</button></div>`);
+  }
+  function showWaiting() {
+    lobbyBackground();
+    showOverlay(`<div class="card">
+      <div class="big">Ищем соперника</div>
+      <div class="logo" id="waitTime">0:00</div>
+      <p>Если никого нет, позови друга ссылкой.</p>
+      <div class="row">
+        <button class="btn" type="button" data-act="create">Позвать друга</button>
+        <button class="btn" type="button" data-act="cancelwait">Отмена</button>
+      </div>
+    </div>`);
+  }
+  function showRoom() {
+    lobbyBackground();
+    net.waitStart = 0;
+    const r = net.room;
+    showOverlay(`<div class="card">
+      <div class="big">Комната ${esc(r.code)}</div>
+      <p>Отправь ссылку другу. Бой до ${r.target} очков начнётся, как только он её откроет.</p>
+      <div class="row">
+        <button class="btn tg" type="button" data-act="share">Отправить в Telegram</button>
+        <button class="btn" type="button" data-act="copy">Скопировать ссылку</button>
+      </div>
+      <p class="muted" id="copyNote">${esc(r.link)}</p>
+      <button class="btn" type="button" data-act="cancelwait">Отмена</button>
+    </div>`);
+  }
+  function onlineError(msg) {
+    lobbyBackground();
+    showOverlay(`<div class="card">
+      <div class="big">Онлайн</div>
+      <p>${esc(msg)}</p>
+      <div class="row">
+        <button class="btn primary" type="button" data-act="online">К онлайну</button>
+        <button class="btn" type="button" data-act="menu">В меню</button>
+      </div>
+    </div>`);
+  }
+  function onlinePause() {
+    if (!overlay.hidden) { overlay.hidden = true; overlay.innerHTML = ''; return; }
+    showOverlay(`<div class="card"><div class="big">Бой идёт</div>
+      <p>Онлайн нельзя поставить на паузу: соперник продолжает летать.</p>
+      <div class="row"><button class="btn primary" type="button" data-act="resumeOnline">Вернуться в бой</button>
+      <button class="btn" type="button" data-act="surrender">Сдаться</button></div></div>`);
+  }
+
+  function onlineAct(act, btn) {
+    if (act === 'online') { onlineMenu(); return; }
+    if (act === 'login') { if (account()) account().login(); return; }
+    if (act === 'quick') { if (stage.classList.contains('touch')) setFull(true); onlineBusy('Подключаюсь…'); netConnect({ t: 'quick' }); return; }
+    if (act === 'create') { onlineBusy('Создаю комнату…'); netConnect({ t: 'create', target: game.target }); return; }
+    if (act === 'cancelwait') { netSend({ t: 'cancel' }); net.waitStart = 0; onlineMenu(); return; }
+    if (act === 'resumeOnline') { overlay.hidden = true; overlay.innerHTML = ''; return; }
+    if (act === 'surrender') { netSend({ t: 'leave' }); overlay.hidden = true; overlay.innerHTML = ''; return; }
+    if (act === 'share' && net.room) {
+      const url = 'https://t.me/share/url?url=' + encodeURIComponent(net.room.link) + '&text=' + encodeURIComponent('Вызываю тебя на дуэль в Бипланах! ✈️');
+      const tg = window.Telegram && window.Telegram.WebApp;
+      if (tg && tg.initData && tg.openTelegramLink) tg.openTelegramLink(url); else window.open(url, '_blank', 'noopener');
+      return;
+    }
+    if (act === 'copy' && net.room) {
+      const note = $('copyNote');
+      const done = () => { if (note) note.textContent = 'Ссылка скопирована: ' + net.room.link; };
+      const fail = () => { if (note) { note.textContent = net.room.link; const r = document.createRange(); r.selectNodeContents(note); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); } };
+      try { navigator.clipboard.writeText(net.room.link).then(done, fail); } catch (e) { fail(); }
+    }
+  }
+
+  // Ссылка из бота открывает игру с ?room=КОД — сразу заходим в комнату.
+  function joinFromUrl() {
+    const code = new URLSearchParams(location.search).get('room');
+    if (!code) return;
+    try { history.replaceState(null, '', location.pathname); } catch (e) { /* ignore */ }
+    net.pendingJoin = code;
+    onlineBusy('Захожу в комнату…');
+    const go = () => {
+      if (!net.pendingJoin) return;
+      if (!account() || !account().token()) { onlineLogin(); return; }
+      const c = net.pendingJoin; net.pendingJoin = null;
+      netConnect({ t: 'join', code: c });
+    };
+    if (account() && account().ready) account().ready.then(go); else go();
+  }
+  addEventListener('bp:login', () => {
+    if (net.pendingJoin) { const c = net.pendingJoin; net.pendingJoin = null; netConnect({ t: 'join', code: c }); }
+    else if (game.mode === 'lobby' && !net.ws) onlineMenu();
+  });
+
+  // ---------- бой ----------
+  function onlineStart(m) {
+    const fresh = !net.inMatch;
+    net.inMatch = true; net.reconnectAt = 0; net.waitStart = 0; net.oppOnline = true;
+    net.you = m.you; net.names = m.names; net.target = m.target; net.kind = m.kind;
+    if (fresh) {
+      net.snaps = []; net.offset = null; net.eject = 0; net.keys = -1;
+      net.props.clear(); net.smoke.clear();
+      resetWorld([false, false]);
+    }
+    game.mode = 'online'; game.over = false; game.paused = false; game.target = m.target;
+    net.cdUntil = performance.now() + m.cd * 1000;
+    hudCache[0] = {}; hudCache[1] = {};
+    setWho(m.names.map((n, i) => (i === m.you ? n + ' · ты' : n)));
+    $('hud').hidden = false;
+    overlay.hidden = true; overlay.innerHTML = '';
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    keys.clear();
+  }
+
+  function onSnapshot(m) {
+    const off = performance.now() / 1000 - m.tm;
+    // минимальная задержка = самый «быстрый» пакет; медленно отпускаем, чтобы пережить дрейф часов
+    net.offset = net.offset == null ? off : Math.min(off, net.offset + 0.0005);
+    net.snaps.push(m);
+    if (net.snaps.length > 12) net.snaps.shift();
+    if (m.on) net.oppOnline = m.on[1 - net.you];
+    for (const e of m.ev || []) onEvent(e);
+  }
+
+  function onEvent(e) {
+    const x = e.x || 0, y = e.y || 0;
+    switch (e.k) {
+      case 'shot': sfx('shot'); break;
+      case 'hit': sparks(x, y); sfx('hit'); break;
+      case 'boom': explosion(x, y, e.t); sfx('boom'); break;
+      case 'pdie': splat(x, y, e.t); sfx('hit'); break;
+      case 'eject': sfx('eject'); break;
+      case 'chute': sfx('chute'); break;
+      case 'land': sfx('land'); break;
+      case 'dust': dust(x, y); break;
+      case 'fix': sfx('fix'); if (e.t === net.you) toast('Самолёт починен'); break;
+      case 'home': if (e.t === net.you) toast('Пилот добрался до ангара'); break;
+      case 'point': sfx('point'); toast(e.m + (e.t === net.you ? ' · +1 тебе' : ' · +1 сопернику')); break;
+    }
+  }
+
+  const lerpX = (a, b, f) => wrapX(a + wrapDx(a, b) * f);
+  const lerp = (a, b, f) => a + (b - a) * f;
+
+  function onlineFrame(dt, now) {
+    // ввод: без открытого меню шлём кнопки при изменении и раз в 250 мс
+    let I = { left: false, right: false, up: false, down: false, fire: false, eject: false };
+    if (overlay.hidden) I = humanInput(0);
+    if (I.eject) net.eject++;
+    const k = (I.left ? 1 : 0) | (I.right ? 2 : 0) | (I.up ? 4 : 0) | (I.down ? 8 : 0) | (I.fire ? 16 : 0);
+    if (k !== net.keys || I.eject || now - net.lastSend > 250) { netSend({ t: 'in', k, e: net.eject }); net.keys = k; net.lastSend = now; }
+
+    const cd = $('countdown'), left = Math.ceil((net.cdUntil - now) / 1000);
+    if (left > 0) { cd.hidden = false; cd.textContent = left; } else if (!cd.hidden) cd.hidden = true;
+
+    updateFx(dt);
+    const S = net.snaps;
+    if (!S.length) return;
+    const rt = now / 1000 - net.offset - INTERP;
+    let a = S[S.length - 1], b = null;
+    if (rt < a.tm) {
+      a = S[0];
+      for (let i = S.length - 1; i > 0; i--) if (S[i - 1].tm <= rt) { a = S[i - 1]; b = S[i]; break; }
+    }
+    const f = b ? clamp((rt - a.tm) / (b.tm - a.tm), 0, 1) : 0;
+    const byId = (rows) => new Map(rows.map((r) => [r[0], r]));
+    const bPl = b && byId(b.pl), bPt = b && byId(b.pt), bB = b && byId(b.b);
+
+    planes = a.pl.map((r) => {
+      const r2 = bPl && bPl.get(r[0]);
+      const prop = (net.props.get(r[0]) || 0) + dt * (4 + r[5] * 22);
+      net.props.set(r[0], prop);
+      const pl = {
+        id: r[0], team: r[1], x: r2 ? lerpX(r[2], r2[2], f) : r[2], y: r2 ? lerp(r[3], r2[3], f) : r[3],
+        a: r2 ? norm(r[4] + angDiff(r2[4], r[4]) * f) : r[4], thr: r[5], state: STATE_P[r[6]], hp: r[7],
+        pilot: !!r[8], repair: r[9], speed: r[10], prop,
+      };
+      if (pl.hp < 2) {
+        const t = (net.smoke.get(pl.id) || 0) - dt;
+        if (t <= 0) { part(pl.x - Math.cos(pl.a) * 6, pl.y, rnd(-4, 4), rnd(-14, -4), rnd(0.6, 1), Math.random() < 0.5 ? '#5d6068' : '#8a8f98', -4, 2); net.smoke.set(pl.id, 0.07); } else net.smoke.set(pl.id, t);
+      }
+      return pl;
+    });
+    pilots = a.pt.map((r) => {
+      const r2 = bPt && bPt.get(r[0]);
+      return { id: r[0], team: r[1], x: r2 ? lerpX(r[2], r2[2], f) : r[2], y: r2 ? lerp(r[3], r2[3], f) : r[3], state: STATE_PT[r[4]], dir: r[5], step: r[6] };
+    });
+    bullets = a.b.map((r) => {
+      const r2 = bB && bB.get(r[0]);
+      return { x: r2 ? lerpX(r[1], r2[1], f) : r[1], y: r2 ? lerp(r[2], r2[2], f) : r[2] };
+    });
+    const sc = S[S.length - 1].sc;
+    players = [0, 1].map((team) => ({
+      team, score: sc[team],
+      plane: planes.find((p) => p.team === team && p.pilot) || null,
+      pilot: pilots.find((p) => p.team === team) || null,
+    }));
+    for (const c of clouds) c.x = wrapX(c.x0 + c.v * rt);
+    if (net.props.size > 64) net.props.clear();
+    if (net.smoke.size > 64) net.smoke.clear();
+  }
+
+  function onlineEnd(m) {
+    net.inMatch = false;
+    $('countdown').hidden = true;
+    const you = m.you, won = m.winner === you, drawn = m.winner < 0;
+    const title = drawn ? 'Ничья' : won ? 'Победа!' : 'Поражение';
+    const why = m.reason === 'forfeit' ? (won ? 'Соперник сдался или отключился' : 'Техническое поражение')
+      : m.reason === 'timeout' ? 'Время боя вышло' : '';
+    const r = m.rating;
+    const rate = m.saved
+      ? `Онлайн-рейтинг <b>${r.after}</b> <span class="${r.delta >= 0 ? 'up' : 'down'}">(${r.delta > 0 ? '+' : r.delta < 0 ? '−' : '±'}${Math.abs(r.delta)})</span>`
+      : 'Результат не сохранился из-за ошибки сервера';
+    lobbyBackground();
+    showOverlay(`<div class="card">
+      <div class="big" style="color:${drawn ? 'var(--ink)' : won ? 'var(--gold)' : 'var(--mute)'}">${title}</div>
+      <div class="logo"><span class="r">${m.scores[0]}</span> : <span class="b">${m.scores[1]}</span></div>
+      <p><span class="r">${esc(m.names[0])}</span> против <span class="b">${esc(m.names[1])}</span>${why ? ' · ' + why : ''}</p>
+      <p class="rate">${rate}</p>
+      <div class="row">
+        <button class="btn primary" type="button" data-act="${net.kind === 'invite' ? 'create' : 'quick'}">${net.kind === 'invite' ? 'Новая комната' : 'Ещё бой'}</button>
+        <button class="btn" type="button" data-act="menu">В меню</button>
+      </div>
+    </div>`);
+    if (account()) account().refresh();
+  }
+
   // ---------- loop ----------
   const DT = 1 / 60;
   let acc = 0, last = 0;
   function frame(now) {
     const el = Math.min(0.1, (now - last) / 1000 || 0);
     last = now;
-    if (!game.paused && !game.over) {
+    if (net.ws && net.ready && now - net.pingAt > 2000) { net.pingAt = now; netSend({ t: 'ping', c: now }); }
+    if (game.mode === 'online') {
+      onlineFrame(el, now);
+      tapped.clear(); touchEject = false;
+    } else if (!game.paused && !game.over) {
       acc += el;
       const inputs = players.map((p) => (p.bot ? botInput(p, el) : humanInput(p.team)));
       tapped.clear(); touchEject = false;
@@ -738,7 +1101,9 @@
     } else { tapped.clear(); touchEject = false; }
     if (toastTimer > 0) { toastTimer -= el; if (toastTimer <= 0) $('toast').classList.add('hide'); }
     draw();
-    if (game.mode === 'play') updateHud();
+    if (live()) updateHud();
+    const wt = document.getElementById('waitTime');
+    if (wt && net.waitStart) { const s2 = Math.floor((now - net.waitStart) / 1000); wt.textContent = Math.floor(s2 / 60) + ':' + String(s2 % 60).padStart(2, '0'); }
     requestAnimationFrame(frame);
   }
 
@@ -746,6 +1111,7 @@
     data = data || {};
     if (data.running) startMatch(!!data.vsBot, data.target || 10, data.scores);
     else menu();
+    joinFromUrl();
     requestAnimationFrame((t) => { last = t; requestAnimationFrame(frame); });
   }
   const hot = window.claude && window.claude.hot;
