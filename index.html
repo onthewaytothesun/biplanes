@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#16202e">
+<title>Бипланы</title>
+<meta name="description" content="Пиксельная дуэль двух бипланов: против бота или вдвоём на одной клавиатуре.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>БИП<span>Л</span>АНЫ</h1>
+    <div class="tools">
+      <button class="btn" id="fullBtn" type="button">Во весь экран</button>
+      <button class="btn" id="pauseBtn" type="button">Пауза</button>
+      <button class="btn" id="muteBtn" type="button">Звук: вкл</button>
+    </div>
+  </header>
+
+  <div class="stage" id="stage">
+  <div class="fullbar">
+    <button type="button" id="fbPause" aria-label="Пауза">II</button>
+    <button type="button" id="fbExit" aria-label="Выйти из полноэкранного режима">✕</button>
+  </div>
+  <div class="screen" id="screen">
+    <canvas id="cv" width="320" height="200"></canvas>
+    <div class="hud" id="hud" hidden>
+      <div class="side r">
+        <span class="who">КРАСНЫЕ</span>
+        <span class="score" id="s0">0</span>
+        <div class="meters"><span class="thr"><b id="t0"></b></span><span class="hp" id="h0"><i></i><i></i></span></div>
+        <span class="state" id="st0"></span>
+      </div>
+      <div class="side b">
+        <span class="who">СИНИЕ</span>
+        <span class="score" id="s1">0</span>
+        <div class="meters"><span class="thr"><b id="t1"></b></span><span class="hp" id="h1"><i></i><i></i></span></div>
+        <span class="state" id="st1"></span>
+      </div>
+    </div>
+    <div class="toast hide" id="toast"></div>
+    <div class="overlay" id="overlay"></div>
+  </div>
+
+  <div class="pad l">
+    <button type="button" class="rot" data-k="left" aria-label="Повернуть против часовой">↺</button>
+    <button type="button" class="rot" data-k="right" aria-label="Повернуть по часовой">↻</button>
+  </div>
+  <div class="pad r">
+    <button type="button" data-k="up">ГАЗ+</button>
+    <button type="button" data-k="eject">ПРЫГ</button>
+    <button type="button" data-k="down">ГАЗ−</button>
+    <button type="button" data-k="fire">ОГОНЬ</button>
+  </div>
+  <p class="rotate-hint">Поверни телефон горизонтально, так удобнее</p>
+  </div>
+
+  <section class="info">
+    <div class="box r">
+      <h2>Красный · игрок 1</h2>
+      <dl>
+        <dt><kbd>A</kbd> <kbd>D</kbd></dt><dd>поворот против / по часовой</dd>
+        <dt><kbd>W</kbd> <kbd>S</kbd></dt><dd>газ больше / меньше</dd>
+        <dt><kbd>Space</kbd></dt><dd>пулемёт</dd>
+        <dt><kbd>E</kbd></dt><dd>катапульта, ещё раз — парашют</dd>
+      </dl>
+    </div>
+    <div class="box b">
+      <h2>Синий · игрок 2</h2>
+      <dl>
+        <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>поворот против / по часовой</dd>
+        <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>газ больше / меньше</dd>
+        <dt><kbd>/</kbd> или <kbd>Enter</kbd></dt><dd>пулемёт</dd>
+        <dt><kbd>.</kbd> или <kbd>R-Shift</kbd></dt><dd>катапульта, ещё раз — парашют</dd>
+      </dl>
+    </div>
+    <div class="box g">
+      <h2>Как летать</h2>
+      <ul>
+        <li><b>Взлёт:</b> дай газ, разгонись по полю и задери нос.</li>
+        <li><b>Сваливание:</b> мало скорости или упёрся в потолок — опусти нос и разгонись.</li>
+        <li><b>Посадка:</b> ровно и небыстро. В своём ангаре самолёт чинится.</li>
+        <li><b>Два попадания</b> — самолёт сбит. Можно выпрыгнуть и дойти пешком до ангара.</li>
+        <li><b>Очко</b> сопернику за каждого погибшего пилота. Пустой самолёт очков не даёт.</li>
+        <li><b>На телефоне</b> игра открывается во весь экран: слева поворот, справа газ, огонь и прыжок. Палец можно вести с кнопки на кнопку.</li>
+        <li><kbd>P</kbd> или <kbd>Esc</kbd> — пауза. Против бота твои клавиши — обе раскладки.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>Ремейк по мотивам <a href="https://regular-dev.itch.io/biplanes-revival" target="_blank" rel="noopener">Biplanes Revival</a> и BlueTooth Biplanes с Nokia. Вся графика и звук генерируются кодом.</footer>
+</div>
+
+<script src="game.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+server {
+    listen 80;
+    server_name biplanes.one-way.dev;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name biplanes.one-way.dev;
+
+    ssl_certificate     /etc/ssl/one-way/fullchain.pem;
+    ssl_certificate_key /etc/ssl/one-way/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    root  /var/www/biplanes;
+    index index.html;
+
+    gzip       on;
+    gzip_types text/css application/javascript;
+
+    # Имена файлов без хешей — браузер ревалидирует по ETag, после деплоя сразу видна новая версия
+    add_header Cache-Control "no-cache" always;
+    add_header X-Content-Type-Options "nosniff" always;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location ~ /\. {
+        deny all;
+    }
+}
