@@ -10,12 +10,14 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<script src="https://telegram.org/js/telegram-web-app.js?59"></script>
 </head>
 <body>
 <div class="wrap">
   <header>
     <h1>БИП<span>Л</span>АНЫ</h1>
     <div class="tools">
+      <div class="acct" id="acct"></div>
       <button class="btn" id="fullBtn" type="button">Во весь экран</button>
       <button class="btn" id="pauseBtn" type="button">Пауза</button>
       <button class="btn" id="muteBtn" type="button">Звук: вкл</button>
@@ -60,6 +62,14 @@
   <p class="rotate-hint">Поверни телефон горизонтально, так удобнее</p>
   </div>
 
+  <section class="league">
+    <div class="box g board-box">
+      <h2>Рейтинг пилотов</h2>
+      <div class="board" id="board"><p class="muted">Загружаю…</p></div>
+    </div>
+    <div class="box profile" id="profile"><h2>Мой профиль</h2><p class="muted">Загружаю…</p></div>
+  </section>
+
   <section class="info">
     <div class="box r">
       <h2>Красный · игрок 1</h2>
@@ -96,6 +106,21 @@
   <footer>Ремейк по мотивам <a href="https://regular-dev.itch.io/biplanes-revival" target="_blank" rel="noopener">Biplanes Revival</a> и BlueTooth Biplanes с Nokia. Вся графика и звук генерируются кодом.</footer>
 </div>
 
+<div class="modal" id="loginModal" hidden>
+  <div class="card login-card" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+    <div class="big" id="loginTitle">Вход через Telegram</div>
+    <ol class="steps">
+      <li>Открой бота по кнопке ниже.</li>
+      <li>Нажми «Старт», затем «Войти».</li>
+      <li>Возвращайся сюда, страница сама увидит вход.</li>
+    </ol>
+    <a class="btn primary" id="loginLink" target="_blank" rel="noopener">Открыть бота</a>
+    <p class="muted" id="loginStatus" aria-live="polite"></p>
+    <button class="btn" type="button" id="loginClose">Отмена</button>
+  </div>
+</div>
+
+<script src="account.js"></script>
 <script src="game.js"></script>
 </body>
 </html>

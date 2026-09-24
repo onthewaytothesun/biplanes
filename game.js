@@ -188,7 +188,9 @@
   }
 
   // ---------- state ----------
-  const game = { mode: 'attract', paused: false, over: false, vsBot: true, target: 10 };
+  const game = { mode: 'attract', paused: false, over: false, vsBot: true, target: 10, playTime: 0, stats: null };
+  // Статистика красного (игрок 1) для отправки на сервер
+  const track = (k) => { if (game.mode === 'play' && game.stats) game.stats[k]++; };
   let players, planes, pilots, bullets, parts;
 
   function newPlane(team) {
@@ -220,7 +222,9 @@
   }
 
   // ---------- scoring ----------
-  function pilotDied(team, msg) {
+  function pilotDied(team, msg, byTeam) {
+    if (team === 0) track('deaths');
+    else if (byTeam === 0) track('kills');
     const pl = players[team];
     pl.pilot = null; pl.plane = pl.plane && pl.plane.dead ? null : pl.plane; pl.respawn = 2.2;
     const other = players[1 - team];
@@ -238,15 +242,15 @@
     if (owner.plane === pl) owner.plane = null;
     if (pl.pilot) {
       const msg = byTeam === 1 - pl.team ? (byTeam === 0 ? 'Красные сбили синих' : 'Синие сбили красных') : (TEAM[pl.team].name + ' разбились');
-      pilotDied(pl.team, msg);
+      pilotDied(pl.team, msg, byTeam);
     }
   }
-  function killPilot(pt, msg) {
+  function killPilot(pt, msg, byTeam) {
     if (pt.dead) return;
     pt.dead = true;
     for (let i = 0; i < 8; i++) part(pt.x, pt.y, rnd(-40, 40), rnd(-60, -10), rnd(0.4, 0.8), i % 2 ? '#b8322a' : TEAM[pt.team].body, 150);
     sfx('hit');
-    pilotDied(pt.team, msg);
+    pilotDied(pt.team, msg, byTeam);
   }
 
   // ---------- physics ----------
@@ -300,6 +304,7 @@
       pl.cd = P.FIRECD;
       const ca = Math.cos(pl.a), sa = Math.sin(pl.a);
       bullets.push({ x: wrapX(pl.x + ca * 10), y: pl.y + sa * 10, vx: ca * P.BULLET + pl.vx, vy: sa * P.BULLET + pl.vy, t: P.BLIFE, team: pl.team });
+      if (pl.team === 0) track('shots');
       sfx('shot');
     }
 
@@ -323,6 +328,7 @@
     const pt = { team: p.team, x: pl.x, y: pl.y - 4, vx: pl.vx * 0.5, vy: pl.vy * 0.5 - 55, state: 'fall', t: 0, dir: 1, step: 0, dead: false };
     pilots.push(pt);
     p.plane = null; p.pilot = pt;
+    if (p.team === 0) track('ejects');
     sfx('eject');
   }
 
@@ -425,6 +431,7 @@
 
   // ---------- step ----------
   function step(dt, inputs) {
+    if (game.mode === 'play') game.playTime += dt;
     players.forEach((p, i) => {
       const I = inputs[i];
       if (p.plane && I.eject && p.plane.pilot && p.plane.state !== 'ground') { eject(p); I.eject = false; }
@@ -444,6 +451,7 @@
         if (pl.dead || pl.team === b.team) continue;
         if (Math.hypot(wrapDx(pl.x, b.x), b.y - pl.y) < 6) {
           b.t = 0; sparks(b.x, b.y); sfx('hit');
+          if (b.team === 0) track('hits');
           if (--pl.hp <= 0) destroyPlane(pl, b.team);
           break;
         }
@@ -452,7 +460,8 @@
       for (const pt of pilots) {
         if (pt.dead || pt.team === b.team) continue;
         if (Math.hypot(wrapDx(pt.x, b.x), b.y - (pt.y - (pt.state === 'chute' ? 2 : 0))) < 3.5) {
-          b.t = 0; killPilot(pt, TEAM[b.team].name + ' подстрелили пилота');
+          b.t = 0; if (b.team === 0) track('hits');
+          killPilot(pt, TEAM[b.team].name + ' подстрелили пилота', b.team);
           break;
         }
       }
@@ -465,7 +474,7 @@
     }
     for (const pl of planes) for (const pt of pilots) {
       if (pl.dead || pt.dead || pl.team === pt.team) continue;
-      if (dist(pl, pt) < 6) killPilot(pt, TEAM[pl.team].name + ' задели пилота винтом');
+      if (dist(pl, pt) < 6) killPilot(pt, TEAM[pl.team].name + ' задели пилота винтом', pl.team);
     }
 
     bullets = bullets.filter((b) => b.t > 0);
@@ -588,6 +597,8 @@
     game.mode = 'play'; game.vsBot = vsBot; game.target = target; game.paused = false; game.over = false;
     resetWorld([false, vsBot]);
     if (scores) players.forEach((p, i) => p.score = scores[i] || 0);
+    game.playTime = 0;
+    game.stats = { shots: 0, hits: 0, kills: 0, deaths: 0, ejects: 0 };
     hudCache[0] = {}; hudCache[1] = {};
     $('hud').hidden = false;
     overlay.hidden = true; overlay.innerHTML = '';
@@ -606,7 +617,14 @@
         <button class="btn primary" type="button" data-act="again">Ещё раз</button>
         <button class="btn" type="button" data-act="menu">В меню</button>
       </div>
+      <p class="rate" id="rateLine"></p>
     </div>`);
+    if (window.bpAccount) {
+      window.bpAccount.reportMatch({
+        mode: game.vsBot ? 'bot' : 'duo', target: game.target, myScore: s[0], oppScore: s[1],
+        durationMs: Math.round(game.playTime * 1000), ...game.stats,
+      }, $('rateLine'));
+    }
   }
   function togglePause() {
     if (game.mode !== 'play' || game.over) return;

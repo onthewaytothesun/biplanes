@@ -1,0 +1,25 @@
+[Unit]
+Description=biplanes game backend (Telegram auth, matches, leaderboard)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=biplanes
+Group=biplanes
+WorkingDirectory=/opt/biplanes
+EnvironmentFile=/etc/biplanes/biplanes.env
+ExecStart=/opt/biplanes/biplanes-server
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=biplanes
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/biplanes/data
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

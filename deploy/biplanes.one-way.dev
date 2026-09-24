@@ -23,6 +23,30 @@ server {
     add_header Cache-Control "no-cache" always;
     add_header X-Content-Type-Options "nosniff" always;
 
+    # Бэкенд: вход через Telegram, матчи, рейтинг
+    location /api/ {
+        proxy_pass            http://127.0.0.1:8093;
+        proxy_http_version    1.1;
+        proxy_set_header      Connection "";
+        proxy_set_header      Host              $host;
+        proxy_set_header      X-Real-IP         $remote_addr;
+        proxy_set_header      X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header      X-Forwarded-Proto $scheme;
+        client_max_body_size  64k;
+        proxy_read_timeout    15s;
+    }
+
+    # Webhook @BiplanesGameBot (проверка X-Telegram-Bot-Api-Secret-Token — в приложении)
+    location = /tg/webhook {
+        proxy_pass            http://127.0.0.1:8093;
+        proxy_http_version    1.1;
+        proxy_set_header      Connection "";
+        proxy_set_header      Host              $host;
+        proxy_set_header      X-Real-IP         $remote_addr;
+        client_max_body_size  1m;
+        proxy_read_timeout    30s;
+    }
+
     location / {
         try_files $uri $uri/ =404;
     }

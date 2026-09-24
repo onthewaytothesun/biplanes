@@ -1,1 +1,6 @@
+CLAUDE.md
 .DS_Store
+dist/
+server/.env
+*.db
+*.db-*
