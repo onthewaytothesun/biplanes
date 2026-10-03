@@ -21,9 +21,20 @@ const (
 	grav    = 140.0
 	bulletV = 210.0
 	bLife   = 0.75
-	fireCD  = 0.22
+	fireCD  = 0.8 // не чаще 1.25 выстрела в секунду
 	respawn = 2.2
+
+	MaxHP       = 3   // два попадания самолёт держит (дым, потом огонь), третье сбивает
+	shieldGrace = 1.0 // столько ещё длится защита после отрыва от земли
 )
+
+// Rules — правила комнаты.
+type Rules struct {
+	Shield bool `json:"shield"` // неуязвимость (мигание) на стартовом взлёте
+	Ram    bool `json:"ram"`    // таран: столкновение взрывает оба самолёта
+}
+
+func DefaultRules() Rules { return Rules{Shield: true} }
 
 var Hangar = [2]float64{24, 296}
 
@@ -58,8 +69,10 @@ type Plane struct {
 	State               PlaneState
 	HP                  int
 	Pilot               bool
-	cd, Repair          float64
+	CD, Repair          float64 // CD — перезарядка пулемёта
 	Dead                bool
+	Shield              bool    // неуязвим: только что из ангара и ещё не взлетел
+	Lift                float64 // сколько секунд в воздухе под защитой
 }
 
 type Pilot struct {
@@ -108,12 +121,13 @@ type World struct {
 	Events  []Event
 	Time    float64
 	Target  int
+	Rules   Rules
 	Winner  int // -1 пока матч идёт
 	nextID  int
 }
 
-func New(target int) *World {
-	w := &World{Target: target, Winner: -1}
+func New(target int, rules Rules) *World {
+	w := &World{Target: target, Rules: rules, Winner: -1}
 	for team := 0; team < 2; team++ {
 		pl := w.newPlane(team)
 		w.Planes = append(w.Planes, pl)
@@ -129,7 +143,7 @@ func (w *World) newPlane(team int) *Plane {
 	if team == 1 {
 		a = math.Pi
 	}
-	return &Plane{ID: w.id(), Team: team, X: Hangar[team], Y: Ground - 5, A: a, State: OnGround, HP: 2, Pilot: true}
+	return &Plane{ID: w.id(), Team: team, X: Hangar[team], Y: Ground - 5, A: a, State: OnGround, HP: MaxHP, Pilot: true, Shield: w.Rules.Shield}
 }
 
 func (w *World) emit(e Event) { w.Events = append(w.Events, e) }
@@ -231,7 +245,7 @@ func (w *World) updatePlane(pl *Plane, in *Input, dt float64) {
 	if in != nil {
 		I = *in
 	}
-	pl.cd -= dt
+	pl.CD -= dt
 	if !pl.Pilot {
 		pl.Thr = math.Max(0, pl.Thr-0.35*dt)
 		if pl.State == InAir {
@@ -274,10 +288,10 @@ func (w *World) updatePlane(pl *Plane, in *Input, dt float64) {
 			pl.A += turn * 0.12
 			pl.Y -= 1
 		}
-		if pl.Pilot && pl.HP < 2 && pl.Speed < 8 && math.Abs(wrapDx(pl.X, Hangar[pl.Team])) < 10 {
+		if pl.Pilot && pl.HP < MaxHP && pl.Speed < 8 && math.Abs(wrapDx(pl.X, Hangar[pl.Team])) < 10 {
 			pl.Repair += dt
 			if pl.Repair > 1.2 {
-				pl.HP = 2
+				pl.HP = MaxHP
 				pl.Repair = 0
 				w.emit(Event{Kind: "fix", Team: pl.Team})
 			}
@@ -313,9 +327,15 @@ func (w *World) updatePlane(pl *Plane, in *Input, dt float64) {
 	}
 	pl.A = angDiff(pl.A, 0)
 	pl.X = wrapX(pl.X)
+	if pl.Shield && pl.State != OnGround {
+		pl.Lift += dt
+		if pl.Lift >= shieldGrace {
+			pl.Shield = false
+		}
+	}
 
-	if I.Fire && pl.Pilot && pl.cd <= 0 {
-		pl.cd = fireCD
+	if I.Fire && pl.Pilot && pl.CD <= 0 {
+		pl.CD = fireCD
 		ca, sa := math.Cos(pl.A), math.Sin(pl.A)
 		w.Bullets = append(w.Bullets, &Bullet{
 			ID: w.id(), Team: pl.Team, X: wrapX(pl.X + ca*10), Y: pl.Y + sa*10,
@@ -446,7 +466,7 @@ func (w *World) Step(dt float64, inputs [2]Input) {
 			continue
 		}
 		for _, pl := range w.Planes {
-			if pl.Dead || pl.Team == b.Team {
+			if pl.Dead || pl.Team == b.Team || pl.Shield {
 				continue
 			}
 			if dist(pl.X, pl.Y, b.X, b.Y) < 6 {
@@ -480,10 +500,10 @@ func (w *World) Step(dt float64, inputs [2]Input) {
 		}
 	}
 
-	for i := 0; i < len(w.Planes); i++ {
+	for i := 0; i < len(w.Planes) && w.Rules.Ram; i++ {
 		for j := i + 1; j < len(w.Planes); j++ {
 			a, b := w.Planes[i], w.Planes[j]
-			if a.Dead || b.Dead || (a.State == OnGround && b.State == OnGround) {
+			if a.Dead || b.Dead || a.Shield || b.Shield || (a.State == OnGround && b.State == OnGround) {
 				continue
 			}
 			if dist(a.X, a.Y, b.X, b.Y) < 9 {

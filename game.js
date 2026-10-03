@@ -3,7 +3,10 @@
   const W = 320, H = 200, GROUND = 180, TAU = Math.PI * 2, DIRS = 32;
   const HANGAR = [24, 296];
   const BARN_X = 160;
-  const P = { THRUST: 95, DRAG: 0.9, GALONG: 70, MAXS: 125, STALL: 30, TAKEOFF: 42, TURN: 2.7, GRAV: 140, BULLET: 210, BLIFE: 0.75, FIRECD: 0.22 };
+  const P = { THRUST: 95, DRAG: 0.9, GALONG: 70, MAXS: 125, STALL: 30, TAKEOFF: 42, TURN: 2.7, GRAV: 140, BULLET: 210, BLIFE: 0.75, FIRECD: 0.8 };
+  // Самолёт держит два попадания (дым, потом огонь), третье сбивает. Щит — сколько ещё
+  // длится неуязвимость после отрыва от земли. Всё как в server/sim.
+  const MAXHP = 3, SHIELD_GRACE = 1.0;
   const TEAM = [
     { name: 'Красные', body: '#c8413b', dark: '#7d231f', wing: '#ec8a6a' },
     { name: 'Синие', body: '#3561c4', dark: '#1d3577', wing: '#7ea6ee' },
@@ -202,7 +205,16 @@
 
   // ---------- state ----------
   // mode: attract (заставка) | play (бот / вдвоём) | lobby (онлайн-меню, фоном заставка) | online (сетевой бой)
-  const game = { mode: 'attract', paused: false, over: false, vsBot: true, target: 10, playTime: 0, stats: null };
+  const game = { mode: 'attract', paused: false, over: false, vsBot: true, target: 10, playTime: 0, stats: null, rules: loadRules() };
+  // Правила комнаты: shield — неуязвимость на стартовом взлёте, ram — таран (столкновение взрывает).
+  function loadRules() {
+    try { const r = JSON.parse(localStorage.getItem('bp.rules')); if (r) return { shield: r.shield !== false, ram: r.ram === true }; } catch (e) { /* storage недоступен */ }
+    return { shield: true, ram: false };
+  }
+  function saveRules() { try { localStorage.setItem('bp.rules', JSON.stringify(game.rules)); } catch (e) { /* storage недоступен */ } }
+  const RULES = [['shield', 'Защита на взлёте'], ['ram', 'Таран']];
+  const rulesSeg = () => `<div class="seg">Правила ${RULES.map(([k, name]) => `<button type="button" data-rule="${k}" aria-pressed="${!!game.rules[k]}">${name}</button>`).join('')}</div>`;
+  const rulesText = (r) => [r.shield ? 'защита на взлёте' : 'без защиты на взлёте', r.ram ? 'таран' : 'без тарана'].join(', ');
   function live() { return game.mode === 'play' || game.mode === 'online'; }
   function attractLike() { return game.mode === 'attract' || game.mode === 'lobby'; }
   const esc = (v) => String(v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -211,7 +223,7 @@
   let players, planes, pilots, bullets, parts;
 
   function newPlane(team) {
-    return { team, x: HANGAR[team], y: GROUND - 5, a: team ? Math.PI : 0, speed: 0, thr: 0, state: 'ground', hp: 2, pilot: true, vx: 0, vy: 0, cd: 0, prop: 0, repair: 0, smoke: 0, dead: false };
+    return { team, x: HANGAR[team], y: GROUND - 5, a: team ? Math.PI : 0, speed: 0, thr: 0, state: 'ground', hp: MAXHP, pilot: true, vx: 0, vy: 0, cd: 0, prop: 0, repair: 0, smoke: 0, dead: false, shield: game.rules.shield, lift: 0 };
   }
   function resetWorld(bots) {
     planes = []; pilots = []; bullets = []; parts = [];
@@ -231,6 +243,17 @@
   }
   function sparks(x, y) { for (let i = 0; i < 6; i++) part(x, y, rnd(-50, 50), rnd(-50, 50), rnd(0.1, 0.3), i % 2 ? '#fff6c0' : '#ffb13b'); }
   function splat(x, y, team) { for (let i = 0; i < 8; i++) part(x, y, rnd(-40, 40), rnd(-60, -10), rnd(0.4, 0.8), i % 2 ? '#b8322a' : TEAM[team].body, 150); }
+  // След подбитого самолёта: одно попадание — дым, два — огонь с чёрным дымом. Возвращает паузу до следующей частицы.
+  function damageTrail(pl) {
+    const x = pl.x - Math.cos(pl.a) * 6;
+    if (pl.hp <= 1) {
+      part(x, pl.y, rnd(-6, 6), rnd(-20, -6), rnd(0.15, 0.35), ['#fff3b0', '#ffd23f', '#ff8c2a', '#e2412b'][Math.floor(Math.random() * 4)], -10, 2);
+      part(x, pl.y, rnd(-4, 4), rnd(-14, -4), rnd(0.7, 1.1), Math.random() < 0.6 ? '#3a3a40' : '#5d6068', -4, 2);
+      return 0.04;
+    }
+    part(x, pl.y, rnd(-4, 4), rnd(-14, -4), rnd(0.6, 1), Math.random() < 0.5 ? '#5d6068' : '#8a8f98', -4, 2);
+    return 0.07;
+  }
   function dust(x, y) { for (let i = 0; i < 3; i++) part(x, y, rnd(-20, 20), rnd(-30, -10), rnd(0.2, 0.4), '#9b7a4e', 120); }
 
   let toastTimer = 0;
@@ -274,10 +297,10 @@
   // ---------- physics ----------
   function hitBarn(x, y, r) { return Math.abs(wrapDx(BARN_X, x)) < 8 + r && y + r >= 147 && y - r < GROUND; }
 
-  function updatePlane(pl, I, dt) {
-    I = I || {};
+  // Чистая динамика самолёта: общая для офлайна и для предсказания в онлайне.
+  // Возвращает 'land' (мягкая посадка), 'crash' (земля/амбар) или null. Порядок как в server/sim.
+  function movePlane(pl, I, dt) {
     pl.cd -= dt;
-    pl.prop += dt * (4 + pl.thr * 22);
     if (!pl.pilot) {
       pl.thr = Math.max(0, pl.thr - 0.35 * dt);
       if (pl.state === 'air') pl.a += (Math.cos(pl.a) >= 0 ? 1 : -1) * 0.6 * dt;
@@ -295,10 +318,6 @@
       pl.x += pl.vx * dt; pl.y = GROUND - 5;
       const noseUp = face > 0 ? turn < 0 : turn > 0;
       if (noseUp && pl.speed > P.TAKEOFF) { pl.state = 'air'; pl.a += turn * 0.12; pl.y -= 1; }
-      if (pl.pilot && pl.hp < 2 && pl.speed < 8 && Math.abs(wrapDx(pl.x, HANGAR[pl.team])) < 10) {
-        pl.repair += dt;
-        if (pl.repair > 1.2) { pl.hp = 2; pl.repair = 0; sfx('fix'); if (!players[pl.team].bot) toast('Самолёт починен'); }
-      } else pl.repair = 0;
     } else if (pl.state === 'air') {
       pl.a += turn * P.TURN * dt;
       pl.speed += (P.THRUST * pl.thr - P.DRAG * pl.speed + P.GALONG * Math.sin(pl.a)) * dt;
@@ -317,6 +336,33 @@
       if (pl.speed > P.STALL * 1.5 && Math.sin(pl.a) > 0.25 && pl.y > 12) pl.state = 'air';
     }
     pl.a = norm(pl.a); pl.x = wrapX(pl.x);
+    return null;
+  }
+
+  // Касание земли и амбара — после выстрела, как в server/sim.
+  function planeContact(pl) {
+    let res = null;
+    if (pl.state !== 'ground' && pl.y + 4 >= GROUND) {
+      const soft = pl.pilot && Math.abs(Math.sin(pl.a)) < 0.28 && pl.vy < 55 && pl.speed < 80;
+      if (!soft) return 'crash';
+      pl.state = 'ground'; pl.a = Math.cos(pl.a) > 0 ? 0 : Math.PI; pl.y = GROUND - 5; pl.speed = Math.abs(pl.vx);
+      res = 'land';
+    }
+    return hitBarn(pl.x, pl.y, 4) ? 'crash' : res;
+  }
+
+  function updatePlane(pl, I, dt) {
+    I = pl.pilot ? (I || {}) : {};
+    pl.prop += dt * (4 + pl.thr * 22);
+    const wasGround = pl.state === 'ground';
+    movePlane(pl, I, dt);
+    if (wasGround) {
+      if (pl.pilot && pl.hp < MAXHP && pl.speed < 8 && Math.abs(wrapDx(pl.x, HANGAR[pl.team])) < 10) {
+        pl.repair += dt;
+        if (pl.repair > 1.2) { pl.hp = MAXHP; pl.repair = 0; sfx('fix'); if (!players[pl.team].bot) toast('Самолёт починен'); }
+      } else pl.repair = 0;
+    }
+    if (pl.shield && pl.state !== 'ground') { pl.lift += dt; if (pl.lift >= SHIELD_GRACE) pl.shield = false; }
 
     if (I.fire && pl.pilot && pl.cd <= 0) {
       pl.cd = P.FIRECD;
@@ -326,16 +372,13 @@
       sfx('shot');
     }
 
-    if (pl.state !== 'ground' && pl.y + 4 >= GROUND) {
-      const soft = pl.pilot && Math.abs(Math.sin(pl.a)) < 0.28 && pl.vy < 55 && pl.speed < 80;
-      if (soft) { pl.state = 'ground'; pl.a = Math.cos(pl.a) > 0 ? 0 : Math.PI; pl.y = GROUND - 5; pl.speed = Math.abs(pl.vx); sfx('land'); }
-      else destroyPlane(pl, null);
-    }
-    if (!pl.dead && hitBarn(pl.x, pl.y, 4)) destroyPlane(pl, null);
+    const hit = planeContact(pl);
+    if (hit === 'land') sfx('land');
+    else if (hit === 'crash') destroyPlane(pl, null);
 
-    if (!pl.dead && pl.hp < 2) {
+    if (!pl.dead && pl.hp < MAXHP) {
       pl.smoke -= dt;
-      if (pl.smoke <= 0) { pl.smoke = 0.07; part(pl.x - Math.cos(pl.a) * 6, pl.y, rnd(-4, 4), rnd(-14, -4), rnd(0.6, 1), Math.random() < 0.5 ? '#5d6068' : '#8a8f98', -4, 2); }
+      if (pl.smoke <= 0) pl.smoke = damageTrail(pl);
     }
   }
 
@@ -350,13 +393,14 @@
     sfx('eject');
   }
 
-  function updatePilot(p, I, dt) {
-    const pt = p.pilot;
+  // Чистая динамика пилота. Возвращает 'chute' | 'land' | 'splat' | 'home' | null.
+  function movePilot(pt, I, dt) {
+    let ev = null;
     pt.t += dt;
     const mv = (I.right ? 1 : 0) - (I.left ? 1 : 0);
     if (pt.state === 'fall') {
       pt.vy += P.GRAV * dt; pt.vx *= 1 - 0.5 * dt;
-      if (I.eject && pt.t > 0.15) { pt.state = 'chute'; sfx('chute'); }
+      if (I.eject && pt.t > 0.15) { pt.state = 'chute'; ev = 'chute'; }
     } else if (pt.state === 'chute') {
       pt.vy += (22 - pt.vy) * 3 * dt; pt.vx += (mv * 28 - pt.vx) * 2 * dt;
     } else {
@@ -366,10 +410,20 @@
     pt.x = wrapX(pt.x + pt.vx * dt); pt.y += pt.vy * dt;
     if (pt.y < 2) { pt.y = 2; pt.vy = Math.max(0, pt.vy); }
     if (pt.state !== 'walk' && pt.y + 2 >= GROUND) {
-      if (pt.state === 'fall' && pt.vy > 75) { killPilot(pt, TEAM[pt.team].name + ': парашют не раскрылся'); return; }
-      pt.state = 'walk'; pt.y = GROUND - 3; pt.vx = 0; sfx('land');
+      if (pt.state === 'fall' && pt.vy > 75) return 'splat';
+      pt.state = 'walk'; pt.y = GROUND - 3; pt.vx = 0; ev = 'land';
     }
-    if (pt.state === 'walk' && Math.abs(wrapDx(pt.x, HANGAR[pt.team])) < 3) {
+    if (pt.state === 'walk' && Math.abs(wrapDx(pt.x, HANGAR[pt.team])) < 3) return 'home';
+    return ev;
+  }
+
+  function updatePilot(p, I, dt) {
+    const pt = p.pilot;
+    const ev = movePilot(pt, I, dt);
+    if (ev === 'chute') sfx('chute');
+    else if (ev === 'land') sfx('land');
+    else if (ev === 'splat') killPilot(pt, TEAM[pt.team].name + ': парашют не раскрылся');
+    else if (ev === 'home') {
       pt.dead = true; p.pilot = null; p.respawn = 0.5;
       if (!p.bot) toast('Пилот добрался до ангара');
     }
@@ -408,7 +462,7 @@
       I.up = true;
       const face = Math.cos(me.a) >= 0 ? 1 : -1;
       if (me.state === 'ground') {
-        if (me.hp < 2 && Math.abs(wrapDx(me.x, HANGAR[p.team])) < 10) { I.up = false; I.down = true; return I; }
+        if (me.hp < MAXHP && Math.abs(wrapDx(me.x, HANGAR[p.team])) < 10) { I.up = false; I.down = true; return I; }
         if (me.speed > P.TAKEOFF + 5) { if (face > 0) I.left = true; else I.right = true; }
         return I;
       }
@@ -436,7 +490,7 @@
       if (me.speed < P.STALL + 10 && alt > 50) desired = face > 0 ? 0.6 : Math.PI - 0.6;
       const d = angDiff(desired, me.a);
       if (d < -0.06) I.left = true; else if (d > 0.06) I.right = true;
-      if (tgt && Math.abs(angDiff(aim, me.a)) < 0.14 && dd < 140) I.fire = true;
+      if (tgt && !tgt.shield && Math.abs(angDiff(aim, me.a)) < 0.14 && dd < 140) I.fire = true;
       if (me.hp === 1 && alt > 70 && dd < 60 && Math.random() < 0.004) I.eject = true;
     } else if (p.pilot) {
       const pt = p.pilot;
@@ -466,7 +520,7 @@
       if (b.y >= GROUND) { b.t = 0; dust(b.x, GROUND - 1); continue; }
       if (hitBarn(b.x, b.y, 0)) { b.t = 0; dust(b.x, b.y); continue; }
       for (const pl of planes) {
-        if (pl.dead || pl.team === b.team) continue;
+        if (pl.dead || pl.team === b.team || pl.shield) continue;
         if (Math.hypot(wrapDx(pl.x, b.x), b.y - pl.y) < 6) {
           b.t = 0; sparks(b.x, b.y); sfx('hit');
           if (b.team === 0) track('hits');
@@ -485,9 +539,9 @@
       }
     }
     // plane vs plane, plane vs pilot
-    for (let i = 0; i < planes.length; i++) for (let j = i + 1; j < planes.length; j++) {
+    for (let i = 0; i < planes.length && game.rules.ram; i++) for (let j = i + 1; j < planes.length; j++) {
       const a = planes[i], b = planes[j];
-      if (a.dead || b.dead || (a.state === 'ground' && b.state === 'ground')) continue;
+      if (a.dead || b.dead || a.shield || b.shield || (a.state === 'ground' && b.state === 'ground')) continue;
       if (dist(a, b) < 9) { destroyPlane(a, null); destroyPlane(b, null); }
     }
     for (const pl of planes) for (const pt of pilots) {
@@ -536,6 +590,7 @@
     const flip = Math.cos(pl.a) < 0 ? 1 : 0;
     const prop = pl.thr > 0.02 || pl.speed > 5 ? (Math.floor(pl.prop) & 1) : 1;
     const spr = sprites[pl.team][pl.pilot ? 1 : 0][prop][flip][idx];
+    if (pl.shield && (Math.floor(performance.now() / 110) & 1)) return; // неуязвим — мигает
     drawWrapped(pl.x, 12, (x) => ctx.drawImage(spr, Math.round(x) - 12, Math.round(pl.y) - 12));
   }
   function drawPilot(pt) {
@@ -625,6 +680,7 @@
         <button class="btn" type="button" data-act="duo">Вдвоём</button>
       </div>
       <div class="seg">Играть до ${seg} очков</div>
+      ${rulesSeg()}
       <div class="games">
         <span>Другие игры</span>
         <div class="row">${GAMES.map((g) => `<a class="game" href="${g.url}" target="_blank" rel="noopener"><img src="img/games/${g.icon}.webp" alt="" width="40" height="40">${g.name}</a>`).join('')}</div>
@@ -685,6 +741,12 @@
     const t = e.target.closest('button');
     if (!t) return;
     audioOn();
+    if (t.dataset.rule) {
+      const k = t.dataset.rule;
+      game.rules = { ...game.rules, [k]: !game.rules[k] }; saveRules();
+      t.setAttribute('aria-pressed', String(game.rules[k]));
+      return;
+    }
     if (t.dataset.target) {
       game.target = +t.dataset.target;
       overlay.querySelectorAll('[data-target]').forEach((b) => b.setAttribute('aria-pressed', String(b === t)));
@@ -775,6 +837,8 @@
     you: 0, names: ['', ''], target: 10, kind: '', room: null, waitStart: 0, oppOnline: true,
     snaps: [], offset: null, keys: -1, eject: 0, lastSend: 0, pingAt: 0, rtt: 0, cdUntil: 0,
     props: new Map(), smoke: new Map(), pendingJoin: null,
+    // предсказание: свой самолёт/пилот считаем сами сразу, сервер потом подтверждает
+    seq: 0, hist: [], pred: null, corr: { x: 0, y: 0 }, acc: 0, lbul: [],
   };
   const account = () => window.bpAccount;
 
@@ -852,6 +916,8 @@
         <button class="btn" type="button" data-act="create">Позвать друга</button>
       </div>
       <div class="seg">С другом до ${seg} очков</div>
+      ${rulesSeg()}
+      <p class="muted">Правила — для боя с другом. Быстрая игра: защита на взлёте, без тарана.</p>
       <button class="btn" type="button" data-act="menu">Назад</button>
     </div>`);
   }
@@ -889,6 +955,7 @@
     showOverlay(`<div class="card">
       <div class="big">Комната ${esc(r.code)}</div>
       <p>Отправь ссылку другу. Бой до ${r.target} очков начнётся, как только он её откроет.</p>
+      ${r.rules ? `<p>Правила: ${rulesText(r.rules)}.</p>` : ''}
       <div class="row">
         <button class="btn tg" type="button" data-act="share">Отправить в Telegram</button>
         <button class="btn" type="button" data-act="copy">Скопировать ссылку</button>
@@ -920,7 +987,7 @@
     if (act === 'online') { onlineMenu(); return; }
     if (act === 'login') { if (account()) account().login(); return; }
     if (act === 'quick') { if (stage.classList.contains('touch')) setFull(true); onlineBusy('Подключаюсь…'); netConnect({ t: 'quick' }); return; }
-    if (act === 'create') { onlineBusy('Создаю комнату…'); netConnect({ t: 'create', target: game.target }); return; }
+    if (act === 'create') { onlineBusy('Создаю комнату…'); netConnect({ t: 'create', target: game.target, rules: game.rules }); return; }
     if (act === 'cancelwait') { netSend({ t: 'cancel' }); net.waitStart = 0; onlineMenu(); return; }
     if (act === 'resumeOnline') { overlay.hidden = true; overlay.innerHTML = ''; return; }
     if (act === 'surrender') { netSend({ t: 'leave' }); overlay.hidden = true; overlay.innerHTML = ''; return; }
@@ -966,6 +1033,7 @@
     if (fresh) {
       net.snaps = []; net.offset = null; net.eject = 0; net.keys = -1;
       net.props.clear(); net.smoke.clear();
+      net.hist = []; net.pred = null; net.corr = { x: 0, y: 0 }; net.acc = 0; net.lbul = [];
       resetWorld([false, false]);
     }
     game.mode = 'online'; game.over = false; game.paused = false; game.target = m.target;
@@ -986,15 +1054,71 @@
     if (net.snaps.length > 12) net.snaps.shift();
     if (m.on) net.oppOnline = m.on[1 - net.you];
     for (const e of m.ev || []) onEvent(e);
+    reconcile(m);
+  }
+
+  // Берём точное серверное состояние своего самолёта и переигрываем поверх него
+  // нажатия, которые сервер ещё не применил. Разницу со старым предсказанием не
+  // показываем скачком, а плавно гасим (net.corr).
+  function reconcile(m) {
+    const ack = m.ack ? m.ack[net.you] : 0;
+    net.hist = net.hist.filter((h) => h.s > ack);
+    const own = m.own && m.own[net.you];
+    if (!own) { net.pred = null; return; }
+    let pred;
+    if (own.pl) {
+      const r = own.pl;
+      pred = { kind: 'pl', o: { id: r[0], team: net.you, x: r[1], y: r[2], a: r[3], speed: r[4], thr: r[5], vx: r[6], vy: r[7],
+        state: STATE_P[r[8]], hp: r[9], cd: r[10], repair: r[11], shield: !!r[12], pilot: true, prop: net.props.get(r[0]) || 0 } };
+    } else {
+      const r = own.pt;
+      pred = { kind: 'pt', o: { id: r[0], team: net.you, x: r[1], y: r[2], vx: r[3], vy: r[4], state: STATE_PT[r[5]], t: r[6], step: r[7], dir: r[8] } };
+    }
+    for (const h of net.hist) predictStep(pred, h.I, false);
+    const prev = net.pred;
+    if (prev && prev.kind === pred.kind && prev.o.id === pred.o.id && !prev.frozen) {
+      const dx = wrapDx(pred.o.x, prev.o.x) + net.corr.x, dy = prev.o.y - pred.o.y + net.corr.y;
+      net.corr = Math.hypot(dx, dy) > 40 ? { x: 0, y: 0 } : { x: dx, y: dy };
+    } else net.corr = { x: 0, y: 0 };
+    net.pred = pred;
+  }
+
+  // Один тик предсказания. fresh = настоящее нажатие сейчас (а не переигровка истории):
+  // только тогда рисуем свою пулю и играем звук выстрела.
+  function predictStep(pred, I, fresh) {
+    if (pred.frozen) return;
+    const o = pred.o;
+    if (pred.kind === 'pl') {
+      movePlane(o, I, DT);
+      if (I.fire && o.cd <= 0) {
+        o.cd = P.FIRECD;
+        if (fresh) {
+          const ca = Math.cos(o.a), sa = Math.sin(o.a);
+          net.lbul.push({ x: wrapX(o.x + ca * 10), y: o.y + sa * 10, vx: ca * P.BULLET + o.vx, vy: sa * P.BULLET + o.vy, t: P.BLIFE });
+          sfx('shot');
+        }
+      }
+      // разбиться может решить только сервер: до его ответа просто стоим
+      if (planeContact(o) === 'crash') pred.frozen = true;
+    } else {
+      const ev = movePilot(o, I, DT);
+      if (ev === 'splat' || ev === 'home') pred.frozen = true;
+    }
+  }
+
+  function dropLocalBullet(x, y) {
+    let best = -1, bd = 14;
+    net.lbul.forEach((b, i) => { const d = Math.hypot(wrapDx(b.x, x), b.y - y); if (d < bd) { bd = d; best = i; } });
+    if (best >= 0) net.lbul.splice(best, 1);
   }
 
   function onEvent(e) {
     const x = e.x || 0, y = e.y || 0;
     switch (e.k) {
-      case 'shot': sfx('shot'); break;
-      case 'hit': sparks(x, y); sfx('hit'); break;
+      case 'shot': if (e.t !== net.you) sfx('shot'); break; // свой выстрел уже прозвучал
+      case 'hit': sparks(x, y); sfx('hit'); if (e.t === net.you) dropLocalBullet(x, y); break;
       case 'boom': explosion(x, y, e.t); sfx('boom'); break;
-      case 'pdie': splat(x, y, e.t); sfx('hit'); break;
+      case 'pdie': splat(x, y, e.t); sfx('hit'); if (e.t !== net.you) dropLocalBullet(x, y); break;
       case 'eject': sfx('eject'); break;
       case 'chute': sfx('chute'); break;
       case 'land': sfx('land'); break;
@@ -1009,15 +1133,36 @@
   const lerp = (a, b, f) => a + (b - a) * f;
 
   function onlineFrame(dt, now) {
-    // ввод: без открытого меню шлём кнопки при изменении и раз в 250 мс
-    let I = { left: false, right: false, up: false, down: false, fire: false, eject: false };
-    if (overlay.hidden) I = humanInput(0);
-    if (I.eject) net.eject++;
-    const k = (I.left ? 1 : 0) | (I.right ? 2 : 0) | (I.up ? 4 : 0) | (I.down ? 8 : 0) | (I.fire ? 16 : 0);
-    if (k !== net.keys || I.eject || now - net.lastSend > 250) { netSend({ t: 'in', k, e: net.eject }); net.keys = k; net.lastSend = now; }
-
     const cd = $('countdown'), left = Math.ceil((net.cdUntil - now) / 1000);
     if (left > 0) { cd.hidden = false; cd.textContent = left; } else if (!cd.hidden) cd.hidden = true;
+
+    // ввод: тиками по 1/60 с, каждый с номером; свой самолёт двигаем сразу (предсказание)
+    let base = { left: false, right: false, up: false, down: false, fire: false, eject: false };
+    if (overlay.hidden) base = humanInput(0);
+    if (left > 0) net.acc = 0;
+    else {
+      if (base.eject) net.eject++;
+      const k = (base.left ? 1 : 0) | (base.right ? 2 : 0) | (base.up ? 4 : 0) | (base.down ? 8 : 0) | (base.fire ? 16 : 0);
+      net.acc = Math.min(net.acc + dt, 0.1);
+      let first = true;
+      while (net.acc >= DT) {
+        net.acc -= DT;
+        const I = { ...base, eject: first && base.eject };
+        first = false;
+        net.seq++;
+        netSend({ t: 'in', s: net.seq, k, e: net.eject });
+        net.hist.push({ s: net.seq, I });
+        if (net.hist.length > 180) net.hist.shift();
+        if (net.pred) predictStep(net.pred, I, true);
+      }
+    }
+    const decay = Math.exp(-dt * 10);
+    net.corr.x *= decay; net.corr.y *= decay;
+    for (const b of net.lbul) {
+      b.x = wrapX(b.x + b.vx * dt); b.y += b.vy * dt; b.t -= dt;
+      if (b.y >= GROUND || hitBarn(b.x, b.y, 0)) b.t = 0;
+    }
+    net.lbul = net.lbul.filter((b) => b.t > 0);
 
     updateFx(dt);
     const S = net.snaps;
@@ -1039,11 +1184,11 @@
       const pl = {
         id: r[0], team: r[1], x: r2 ? lerpX(r[2], r2[2], f) : r[2], y: r2 ? lerp(r[3], r2[3], f) : r[3],
         a: r2 ? norm(r[4] + angDiff(r2[4], r[4]) * f) : r[4], thr: r[5], state: STATE_P[r[6]], hp: r[7],
-        pilot: !!r[8], repair: r[9], speed: r[10], prop,
+        pilot: !!r[8], repair: r[9], speed: r[10], shield: !!r[11], prop,
       };
-      if (pl.hp < 2) {
+      if (pl.hp < MAXHP) {
         const t = (net.smoke.get(pl.id) || 0) - dt;
-        if (t <= 0) { part(pl.x - Math.cos(pl.a) * 6, pl.y, rnd(-4, 4), rnd(-14, -4), rnd(0.6, 1), Math.random() < 0.5 ? '#5d6068' : '#8a8f98', -4, 2); net.smoke.set(pl.id, 0.07); } else net.smoke.set(pl.id, t);
+        net.smoke.set(pl.id, t <= 0 ? damageTrail(pl) : t);
       }
       return pl;
     });
@@ -1051,10 +1196,22 @@
       const r2 = bPt && bPt.get(r[0]);
       return { id: r[0], team: r[1], x: r2 ? lerpX(r[2], r2[2], f) : r[2], y: r2 ? lerp(r[3], r2[3], f) : r[3], state: STATE_PT[r[4]], dir: r[5], step: r[6] };
     });
-    bullets = a.b.map((r) => {
+    // свои пули рисуем локальные (они вылетели сразу), чужие — с сервера
+    bullets = a.b.filter((r) => r[3] !== net.you).map((r) => {
       const r2 = bB && bB.get(r[0]);
       return { x: r2 ? lerpX(r[1], r2[1], f) : r[1], y: r2 ? lerp(r[2], r2[2], f) : r[2] };
-    });
+    }).concat(net.lbul);
+
+    // свой самолёт/пилот — из предсказания, остальное — интерполяция
+    const pr = net.pred;
+    if (pr) {
+      const o = pr.o;
+      const shown = { ...o, x: wrapX(o.x + net.corr.x), y: o.y + net.corr.y };
+      if (pr.kind === 'pl') {
+        shown.prop = (net.props.get(o.id) || 0);
+        planes = planes.filter((q) => q.id !== o.id).concat(shown);
+      } else pilots = pilots.filter((q) => q.id !== o.id).concat(shown);
+    }
     const sc = S[S.length - 1].sc;
     players = [0, 1].map((team) => ({
       team, score: sc[team],

@@ -47,6 +47,7 @@ type room struct {
 	code   string
 	host   *client
 	target int
+	rules  sim.Rules
 }
 
 type client struct {
@@ -76,13 +77,15 @@ func (c *client) push(v any) {
 }
 
 type wsIn struct {
-	T      string  `json:"t"`
-	Token  string  `json:"token"`
-	K      int     `json:"k"`
-	E      int     `json:"e"`
-	Code   string  `json:"code"`
-	Target int     `json:"target"`
-	C      float64 `json:"c"`
+	T      string     `json:"t"`
+	Token  string     `json:"token"`
+	S      int        `json:"s"` // номер тика ввода клиента (для предсказания)
+	K      int        `json:"k"`
+	E      int        `json:"e"`
+	Code   string     `json:"code"`
+	Target int        `json:"target"`
+	Rules  *sim.Rules `json:"rules"` // нет — правила по умолчанию
+	C      float64    `json:"c"`
 }
 
 func (h *hub) serveWS(w http.ResponseWriter, r *http.Request) {
@@ -142,13 +145,17 @@ func (h *hub) serveWS(w http.ResponseWriter, r *http.Request) {
 		}
 		switch m.T {
 		case "in":
-			h.input(c, m.K, m.E)
+			h.input(c, m.S, m.K, m.E)
 		case "ping":
 			c.push(map[string]any{"t": "pong", "c": m.C})
 		case "quick":
 			h.quick(c)
 		case "create":
-			h.createRoom(c, m.Target)
+			rules := sim.DefaultRules()
+			if m.Rules != nil {
+				rules = *m.Rules
+			}
+			h.createRoom(c, m.Target, rules)
 		case "join":
 			h.joinRoom(c, m.Code)
 		case "cancel":
@@ -229,9 +236,9 @@ func (h *hub) quick(c *client) {
 		h.queue = nil
 		// кто красный — случайно, чтобы не было преимущества «кто раньше встал в очередь»
 		if coin() {
-			h.startLocked(q, c, "quick", quickTarget)
+			h.startLocked(q, c, "quick", quickTarget, sim.DefaultRules())
 		} else {
-			h.startLocked(c, q, "quick", quickTarget)
+			h.startLocked(c, q, "quick", quickTarget, sim.DefaultRules())
 		}
 		return
 	}
@@ -239,7 +246,7 @@ func (h *hub) quick(c *client) {
 	c.push(map[string]string{"t": "waiting", "kind": "quick"})
 }
 
-func (h *hub) createRoom(c *client, target int) {
+func (h *hub) createRoom(c *client, target int, rules sim.Rules) {
 	if target != 5 && target != 10 && target != 15 {
 		target = 10
 	}
@@ -253,8 +260,8 @@ func (h *hub) createRoom(c *client, target int) {
 	for h.rooms[code] != nil {
 		code = roomCode()
 	}
-	h.rooms[code] = &room{code: code, host: c, target: target}
-	msg := map[string]any{"t": "room", "code": code, "target": target, "link": "https://t.me/" + h.app.bot + "?start=room_" + code}
+	h.rooms[code] = &room{code: code, host: c, target: target, rules: rules}
+	msg := map[string]any{"t": "room", "code": code, "target": target, "rules": rules, "link": "https://t.me/" + h.app.bot + "?start=room_" + code}
 	if h.app.cfg.PublicURL != "" {
 		msg["web"] = h.app.cfg.PublicURL + "/?room=" + code
 	}
@@ -279,15 +286,15 @@ func (h *hub) joinRoom(c *client, code string) {
 	}
 	delete(h.rooms, code)
 	h.cancelWaitLocked(c)
-	h.startLocked(r.host, c, "invite", r.target)
+	h.startLocked(r.host, c, "invite", r.target, r.rules)
 }
 
-func (h *hub) input(c *client, keys, eject int) {
+func (h *hub) input(c *client, seq, keys, eject int) {
 	h.mu.Lock()
 	m := h.matches[c.id]
 	h.mu.Unlock()
 	if m != nil {
-		m.setInput(c.id, keys, eject)
+		m.setInput(c.id, seq, keys, eject)
 	}
 }
 
@@ -322,6 +329,7 @@ type match struct {
 	hub    *hub
 	kind   string
 	target int
+	rules  sim.Rules
 	users  [2]int64
 	names  [2]string
 	rating [2]int
@@ -329,6 +337,8 @@ type match struct {
 	mu        sync.Mutex
 	conns     [2]*client
 	keys      [2]int
+	queue     [2][]inputMsg // по одному вводу на тик, как клиент их и посчитал
+	ack       [2]int        // номер последнего применённого ввода
 	eject     [2]int
 	lastEject [2]int
 	goneAt    [2]time.Time
@@ -336,22 +346,22 @@ type match struct {
 	w         *sim.World
 }
 
-func (h *hub) startLocked(red, blue *client, kind string, target int) {
+func (h *hub) startLocked(red, blue *client, kind string, target int, rules sim.Rules) {
 	m := &match{
-		hub: h, kind: kind, target: target,
+		hub: h, kind: kind, target: target, rules: rules,
 		users:    [2]int64{red.id, blue.id},
 		names:    [2]string{red.name, blue.name},
 		rating:   [2]int{red.pvpRating, blue.pvpRating},
 		conns:    [2]*client{red, blue},
 		surrendr: -1,
-		w:        sim.New(target),
+		w:        sim.New(target, rules),
 	}
 	h.matches[red.id] = m
 	h.matches[blue.id] = m
 	for team, c := range m.conns {
 		c.push(m.startMsg(team, countdown.Seconds()))
 	}
-	slog.Info("match start", "kind", kind, "red", red.id, "blue", blue.id, "target", target)
+	slog.Info("match start", "kind", kind, "red", red.id, "blue", blue.id, "target", target, "shield", rules.Shield, "ram", rules.Ram)
 	go m.run()
 }
 
@@ -367,7 +377,7 @@ func (m *match) team(uid int64) int {
 
 func (m *match) startMsg(team int, cd float64) map[string]any {
 	return map[string]any{
-		"t": "start", "you": team, "target": m.target, "kind": m.kind, "cd": cd,
+		"t": "start", "you": team, "target": m.target, "kind": m.kind, "cd": cd, "rules": m.rules,
 		"names": m.names, "ratings": m.rating,
 	}
 }
@@ -380,6 +390,7 @@ func (m *match) attach(c *client) {
 	m.conns[t] = c
 	m.goneAt[t] = time.Time{}
 	m.keys[t] = 0
+	m.queue[t] = nil
 	c.push(m.startMsg(t, 0))
 	if o := m.conns[1-t]; o != nil {
 		o.push(map[string]any{"t": "opp", "online": true})
@@ -396,16 +407,33 @@ func (m *match) detach(c *client) {
 	m.conns[t] = nil
 	m.goneAt[t] = time.Now()
 	m.keys[t] = 0
+	m.queue[t] = nil
 	if o := m.conns[1-t]; o != nil {
 		o.push(map[string]any{"t": "opp", "online": false, "grace": reconnectGrace.Seconds()})
 	}
 }
 
-func (m *match) setInput(uid int64, keys, eject int) {
+type inputMsg struct{ seq, keys int }
+
+const (
+	maxQueue  = 30 // больше — клиент явно завис или шлёт мусор
+	catchUpAt = 6  // очередь длиннее — отбрасываем старое, чтобы не копить задержку
+)
+
+func (m *match) setInput(uid int64, seq, keys, eject int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if t := m.team(uid); t >= 0 {
-		m.keys[t] = keys
+		if seq > 0 {
+			if n := len(m.queue[t]); n == 0 || seq > m.queue[t][n-1].seq {
+				m.queue[t] = append(m.queue[t], inputMsg{seq, keys})
+			}
+			if len(m.queue[t]) > maxQueue {
+				m.queue[t] = m.queue[t][len(m.queue[t])-maxQueue:]
+			}
+		} else {
+			m.keys[t] = keys // клиент без номеров — просто текущее состояние кнопок
+		}
 		if eject > m.eject[t] {
 			m.eject[t] = eject
 		}
@@ -445,11 +473,21 @@ func (m *match) run() {
 	defer ticker.Stop()
 	var pending []sim.Event
 	var endAt time.Time
+	m.mu.Lock()
+	m.queue = [2][]inputMsg{} // всё, что пришло во время отсчёта, не считается
+	m.mu.Unlock()
 	for tick := 0; ; tick++ {
 		<-ticker.C
 		m.mu.Lock()
 		var in [2]sim.Input
 		for t := range 2 {
+			if q := m.queue[t]; len(q) > 0 {
+				if len(q) > catchUpAt {
+					q = q[len(q)-3:]
+				}
+				m.keys[t], m.ack[t] = q[0].keys, q[0].seq
+				m.queue[t] = q[1:]
+			}
 			k := m.keys[t]
 			in[t] = sim.Input{Left: k&1 != 0, Right: k&2 != 0, Up: k&4 != 0, Down: k&8 != 0, Fire: k&16 != 0}
 			if m.eject[t] > m.lastEject[t] {
@@ -500,12 +538,19 @@ func (m *match) run() {
 
 func r1(v float64) float64 { return math.Round(v*10) / 10 }
 
+func b2f(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // snapshot — компактный снимок мира. Строки — массивы чисел, чтобы кадр весил ~0.5 КБ.
 func (m *match) snapshot(ev []sim.Event) map[string]any {
 	w := m.w
 	pl := make([][]float64, 0, len(w.Planes))
 	for _, p := range w.Planes {
-		pilot, rep := 0.0, 0.0
+		pilot, rep, shield := 0.0, 0.0, b2f(p.Shield)
 		if p.Pilot {
 			pilot = 1
 		}
@@ -513,7 +558,7 @@ func (m *match) snapshot(ev []sim.Event) map[string]any {
 			rep = 1
 		}
 		pl = append(pl, []float64{float64(p.ID), float64(p.Team), r1(p.X), r1(p.Y), math.Round(p.A*1000) / 1000,
-			math.Round(p.Thr*100) / 100, float64(p.State), float64(p.HP), pilot, rep, r1(p.Speed)})
+			math.Round(p.Thr*100) / 100, float64(p.State), float64(p.HP), pilot, rep, r1(p.Speed), shield})
 	}
 	pt := make([][]float64, 0, len(w.Pilots))
 	for _, p := range w.Pilots {
@@ -521,7 +566,20 @@ func (m *match) snapshot(ev []sim.Event) map[string]any {
 	}
 	b := make([][]float64, 0, len(w.Bullets))
 	for _, x := range w.Bullets {
-		b = append(b, []float64{float64(x.ID), r1(x.X), r1(x.Y)})
+		b = append(b, []float64{float64(x.ID), r1(x.X), r1(x.Y), float64(x.Team)})
+	}
+	// Точное состояние «своего» самолёта или пилота каждого игрока — от него клиент
+	// переигрывает ещё не подтверждённые нажатия (предсказание на клиенте).
+	var own [2]any
+	for t, p := range w.Players {
+		switch {
+		case p.Plane != nil:
+			q := p.Plane
+			own[t] = map[string][]float64{"pl": {float64(q.ID), q.X, q.Y, q.A, q.Speed, q.Thr, q.VX, q.VY, float64(q.State), float64(q.HP), q.CD, q.Repair, b2f(q.Shield)}}
+		case p.Pilot != nil:
+			q := p.Pilot
+			own[t] = map[string][]float64{"pt": {float64(q.ID), q.X, q.Y, q.VX, q.VY, float64(q.State), q.T, q.Step, float64(q.Dir)}}
+		}
 	}
 	for i := range ev {
 		ev[i].X, ev[i].Y = r1(ev[i].X), r1(ev[i].Y)
@@ -530,7 +588,7 @@ func (m *match) snapshot(ev []sim.Event) map[string]any {
 		"t": "s", "tm": math.Round(w.Time*1000) / 1000,
 		"sc": [2]int{w.Players[0].Score, w.Players[1].Score},
 		"on": [2]bool{m.conns[0] != nil, m.conns[1] != nil},
-		"pl": pl, "pt": pt, "b": b, "ev": ev,
+		"pl": pl, "pt": pt, "b": b, "ev": ev, "ack": m.ack, "own": own,
 	}
 }
 

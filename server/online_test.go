@@ -92,6 +92,16 @@ func TestOnlineQuickMatchAndForfeit(t *testing.T) {
 		t.Fatalf("want 2 planes in snapshot: %v", snap["pl"])
 	}
 
+	// нумерованный ввод: сервер применяет по одному за тик и подтверждает номер (ack)
+	for seq := 1; seq <= 5; seq++ {
+		_ = wsjson.Write(ctx, c1, wsMsg{"t": "in", "s": seq, "k": 4})
+	}
+	acked := readUntil(t, ctx, c1, "s", func(m wsMsg) bool { return m["ack"].([]any)[you1].(float64) == 5 })
+	own := acked["own"].([]any)[you1].(map[string]any)["pl"].([]any)
+	if len(own) != 13 || own[5].(float64) <= 0 {
+		t.Fatalf("own plane state must be exact and throttle > 0 after acked input: %v", own)
+	}
+
 	// второй сдаётся — первый побеждает техническим
 	_ = wsjson.Write(ctx, c2, wsMsg{"t": "leave"})
 	end := readUntil(t, ctx, c1, "end", nil)
@@ -112,13 +122,17 @@ func TestOnlineQuickMatchAndForfeit(t *testing.T) {
 	}
 
 	// после матча можно сразу создать комнату, и второй игрок в неё заходит
-	_ = wsjson.Write(ctx, c1, wsMsg{"t": "create", "target": 5})
+	_ = wsjson.Write(ctx, c1, wsMsg{"t": "create", "target": 5, "rules": map[string]bool{"shield": false, "ram": true}})
 	room := readUntil(t, ctx, c1, "room", nil)
 	if !strings.Contains(room["link"].(string), "t.me/TestBot?start=room_") {
 		t.Fatalf("room link: %v", room)
 	}
 	_ = wsjson.Write(ctx, c2, wsMsg{"t": "join", "code": strings.ToLower(room["code"].(string))})
-	if m := readUntil(t, ctx, c2, "start", nil); int(m["target"].(float64)) != 5 || m["kind"] != "invite" {
+	m := readUntil(t, ctx, c2, "start", nil)
+	if int(m["target"].(float64)) != 5 || m["kind"] != "invite" {
 		t.Fatalf("invite start: %v", m)
+	}
+	if r, _ := m["rules"].(map[string]any); r["shield"] != false || r["ram"] != true {
+		t.Fatalf("room rules must reach the match: %v", m["rules"])
 	}
 }
