@@ -603,6 +603,11 @@
 
   // ---------- screens ----------
   const overlay = $('overlay');
+  const GAMES = [
+    { name: 'Судоку', icon: 'sudoku', url: 'https://t.me/SudokuChampBot/game' },
+    { name: 'Маджонг', icon: 'mahjong', url: 'https://t.me/MahjongTheGameBot/game' },
+    { name: 'Башни', icon: 'towers', url: 'https://t.me/TowerDefenseGameBot/play' },
+  ];
   function showOverlay(html) { overlay.innerHTML = html; overlay.hidden = false; }
   function menu() {
     if (game.mode === 'online' || game.mode === 'lobby') netClose();
@@ -620,6 +625,10 @@
         <button class="btn" type="button" data-act="duo">Вдвоём</button>
       </div>
       <div class="seg">Играть до ${seg} очков</div>
+      <div class="games">
+        <span>Другие игры</span>
+        <div class="row">${GAMES.map((g) => `<a class="game" href="${g.url}" target="_blank" rel="noopener"><img src="img/games/${g.icon}.webp" alt="" width="40" height="40">${g.name}</a>`).join('')}</div>
+      </div>
     </div>`);
   }
   function setWho(names) {
@@ -670,6 +679,9 @@
     } else { overlay.hidden = true; overlay.innerHTML = ''; keys.clear(); }
   }
   overlay.addEventListener('click', (e) => {
+    // Внутри Telegram открываем другую Mini App нативно, а не через браузер.
+    const a = e.target.closest('a.game'), tg = window.Telegram && window.Telegram.WebApp;
+    if (a && tg && tg.initData && tg.openTelegramLink) { e.preventDefault(); tg.openTelegramLink(a.href); return; }
     const t = e.target.closest('button');
     if (!t) return;
     audioOn();
