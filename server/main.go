@@ -20,6 +20,7 @@ type config struct {
 	PublicURL     string // https://biplanes.one-way.dev — для webhook и кнопки Mini App
 	WebhookSecret string // X-Telegram-Bot-Api-Secret-Token
 	StaticDir     string // для локальной разработки: отдавать фронт с этого же сервера
+	TelegramProxy string // прокси только для Bot API, пусто — напрямую
 }
 
 type app struct {
@@ -38,6 +39,7 @@ func loadConfig() (config, error) {
 		PublicURL:     strings.TrimRight(os.Getenv("PUBLIC_URL"), "/"),
 		WebhookSecret: os.Getenv("WEBHOOK_SECRET"),
 		StaticDir:     os.Getenv("STATIC_DIR"),
+		TelegramProxy: os.Getenv("TELEGRAM_PROXY"),
 	}
 	if c.BotToken == "" {
 		return c, errors.New("BOT_TOKEN is required")
@@ -78,7 +80,10 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	tg := newTelegram(cfg.BotToken)
+	tg, err := newTelegram(cfg.BotToken, cfg.TelegramProxy)
+	if err != nil {
+		return err
+	}
 	me, err := tg.getMe(ctx)
 	if err != nil {
 		return err

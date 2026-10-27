@@ -16,8 +16,26 @@ type telegram struct {
 	hc    *http.Client
 }
 
-func newTelegram(token string) *telegram {
-	return &telegram{token: token, hc: &http.Client{Timeout: 15 * time.Second}}
+// newTelegram создаёт клиент Bot API. proxy — необязательный прокси только
+// для Telegram (socks5://user:pass@host:port): с сервера api.telegram.org
+// режут, а остальное работает напрямую.
+func newTelegram(token, proxy string) (*telegram, error) {
+	hc := &http.Client{Timeout: 15 * time.Second}
+	if proxy != "" {
+		u, err := url.Parse(proxy)
+		if err != nil || u.Host == "" {
+			return nil, errors.New("TELEGRAM_PROXY: invalid url")
+		}
+		switch u.Scheme {
+		case "socks5", "socks5h", "http", "https":
+		default:
+			return nil, fmt.Errorf("TELEGRAM_PROXY: unsupported scheme %q", u.Scheme)
+		}
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.Proxy = http.ProxyURL(u)
+		hc.Transport = tr
+	}
+	return &telegram{token: token, hc: hc}, nil
 }
 
 // call вызывает Bot API. Ошибки не содержат URL — в нём токен бота.
